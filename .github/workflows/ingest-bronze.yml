@@ -2,11 +2,6 @@ name: Trigger Databricks Bronze Ingestion
 
 on:
   workflow_dispatch:
-    inputs:
-      new_files:
-        description: 'Comma-separated list of new files to process'
-        required: false
-        default: 'all'
   push:
     branches:
       - main
@@ -22,56 +17,36 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Detect newly added files
+      - name: Detect changed files
         id: detect
         run: |
-          NEW_FILES=$(git diff --name-only --diff-filter=A HEAD~1 HEAD -- 'data/')
-          echo "new_files=${NEW_FILES}" >> $GITHUB_OUTPUT
-          echo "Newly added files: $NEW_FILES"
-          if [ -z "$NEW_FILES" ]; then
-            echo "WARNING: No new files detected in data/ — Databricks job will not be triggered"
-          fi
+          CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'data/')
+          echo "Changed files in data/: $CHANGED"
+          echo "changed=${CHANGED}" >> $GITHUB_OUTPUT
 
       - name: Trigger Databricks Job
-        id: trigger
-        if: steps.detect.outputs.new_files != ''
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_JOB_ID: ${{ secrets.DATABRICKS_JOB_ID }}
         run: |
-          JOB_RUN=$(curl -s -X POST \
+          echo "Triggering Databricks job ID: $DATABRICKS_JOB_ID"
+          echo "Host: $DATABRICKS_HOST"
+          RESPONSE=$(curl -s -X POST \
             "${DATABRICKS_HOST}/api/2.1/jobs/runs/now" \
             -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "{
-              \"job_id\": \"${{ secrets.DATABRICKS_JOB_ID }}\",
+              \"job_id\": ${DATABRICKS_JOB_ID},
               \"notebook_params\": {
                 \"commit_sha\": \"${{ github.sha }}\",
-                \"branch\": \"${{ github.ref_name }}\",
-                \"new_files\": \"${{ steps.detect.outputs.new_files }}\"
+                \"changed_files\": \"${{ steps.detect.outputs.changed }}\"
               }
             }")
-          echo "Databricks API response: $JOB_RUN"
-          echo "Run ID: $(echo $JOB_RUN | jq .run_id)"
-          echo "run_id=$(echo $JOB_RUN | jq .run_id)" >> $GITHUB_OUTPUT
-
-      - name: Wait for job completion
-        if: steps.detect.outputs.new_files != ''
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        run: |
-          RUN_ID=${{ steps.trigger.outputs.run_id }}
-          while true; do
-            RESULT=$(curl -sf \
-              "${DATABRICKS_HOST}/api/2.1/jobs/runs/get?run_id=${RUN_ID}" \
-              -H "Authorization: Bearer ${DATABRICKS_TOKEN}")
-            STATE=$(echo $RESULT | jq -r '.state.life_cycle_state')
-            RESULT_STATE=$(echo $RESULT | jq -r '.state.result_state')
-            echo "State: $STATE | Result: $RESULT_STATE"
-            if [[ "$STATE" == "TERMINATED" || "$STATE" == "SKIPPED" ]]; then
-              [[ "$RESULT_STATE" != "SUCCESS" ]] && exit 1
-              break
-            fi
-            sleep 30
-          done
+          echo "Databricks response: $RESPONSE"
+          RUN_ID=$(echo $RESPONSE | jq -r '.run_id // "null"')
+          echo "Run ID: $RUN_ID"
+          if [ "$RUN_ID" = "null" ]; then
+            echo "ERROR: Job was not triggered. Check the response above."
+            exit 1
+          fi
