@@ -28,6 +28,9 @@ jobs:
           NEW_FILES=$(git diff --name-only --diff-filter=A HEAD~1 HEAD -- 'data/')
           echo "new_files=${NEW_FILES}" >> $GITHUB_OUTPUT
           echo "Newly added files: $NEW_FILES"
+          if [ -z "$NEW_FILES" ]; then
+            echo "WARNING: No new files detected in data/ — Databricks job will not be triggered"
+          fi
 
       - name: Trigger Databricks Job
         id: trigger
@@ -36,7 +39,7 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          JOB_RUN=$(curl -sf -X POST \
+          JOB_RUN=$(curl -s -X POST \
             "${DATABRICKS_HOST}/api/2.1/jobs/runs/now" \
             -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
             -H "Content-Type: application/json" \
@@ -48,6 +51,7 @@ jobs:
                 \"new_files\": \"${{ steps.detect.outputs.new_files }}\"
               }
             }")
+          echo "Databricks API response: $JOB_RUN"
           echo "Run ID: $(echo $JOB_RUN | jq .run_id)"
           echo "run_id=$(echo $JOB_RUN | jq .run_id)" >> $GITHUB_OUTPUT
 
