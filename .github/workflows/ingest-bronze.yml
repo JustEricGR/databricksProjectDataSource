@@ -7,7 +7,6 @@ on:
         description: 'Comma-separated list of new files to process'
         required: false
         default: 'all'
-        type: string
   push:
     branches:
       - main
@@ -21,7 +20,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2  # needed to compare with previous commit
+          fetch-depth: 2
 
       - name: Detect newly added files
         id: detect
@@ -31,6 +30,7 @@ jobs:
           echo "Newly added files: $NEW_FILES"
 
       - name: Trigger Databricks Job
+        id: trigger
         if: steps.detect.outputs.new_files != ''
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -50,7 +50,6 @@ jobs:
             }")
           echo "Run ID: $(echo $JOB_RUN | jq .run_id)"
           echo "run_id=$(echo $JOB_RUN | jq .run_id)" >> $GITHUB_OUTPUT
-        id: trigger
 
       - name: Wait for job completion
         if: steps.detect.outputs.new_files != ''
