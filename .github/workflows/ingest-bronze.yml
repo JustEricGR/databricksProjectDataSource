@@ -1,0 +1,48 @@
+name: Trigger Databricks Bronze Ingestion
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'data/**'        # optional: only trigger if data files changed
+      - 'src/**'         # or trigger on any code change
+
+jobs:
+  trigger-databricks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Databricks Job
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          JOB_RUN=$(curl -sf -X POST \
+            "${DATABRICKS_HOST}/api/2.1/jobs/runs/now" \
+            -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "job_id": 123,
+              "notebook_params": {
+                "commit_sha": "${{ github.sha }}",
+                "branch": "${{ github.ref_name }}",
+                "repo_url": "${{ github.repository }}"
+              }
+            }')
+          echo "Run ID: $(echo $JOB_RUN | jq .run_id)"
+
+      - name: Wait for job completion (optional)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          RUN_ID=$(curl -sf -X POST ... | jq .run_id)  # capture from above
+          while true; do
+            STATE=$(curl -sf \
+              "${DATABRICKS_HOST}/api/2.1/jobs/runs/get?run_id=${RUN_ID}" \
+              -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
+              | jq -r '.state.life_cycle_state')
+            echo "State: $STATE"
+            [[ "$STATE" == "TERMINATED" || "$STATE" == "SKIPPED" ]] && break
+            sleep 30
+          done
