@@ -1,6 +1,13 @@
 name: Trigger Databricks Bronze Ingestion
 
 on:
+workflow_dispatch:
+    inputs:
+      new_files:
+        description: 'Comma-separated list of new files to process'
+        required: false
+        default: 'all'
+        type: string
   push:
     branches:
       - main
