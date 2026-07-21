@@ -5,14 +5,26 @@ on:
     branches:
       - main
     paths:
-      - 'data/**'        # optional: only trigger if data files changed
-      - 'src/**'         # or trigger on any code change
+      - 'data/**'
 
 jobs:
   trigger-databricks:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # needed to compare with previous commit
+
+      - name: Detect newly added files
+        id: detect
+        run: |
+          NEW_FILES=$(git diff --name-only --diff-filter=A HEAD~1 HEAD -- 'data/')
+          echo "new_files=${NEW_FILES}" >> $GITHUB_OUTPUT
+          echo "Newly added files: $NEW_FILES"
+
       - name: Trigger Databricks Job
+        if: steps.detect.outputs.new_files != ''
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -21,28 +33,35 @@ jobs:
             "${DATABRICKS_HOST}/api/2.1/jobs/runs/now" \
             -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d '{
-              "job_id": 123,
-              "notebook_params": {
-                "commit_sha": "${{ github.sha }}",
-                "branch": "${{ github.ref_name }}",
-                "repo_url": "${{ github.repository }}"
+            -d "{
+              \"job_id\": \"${{ secrets.DATABRICKS_JOB_ID }}\",
+              \"notebook_params\": {
+                \"commit_sha\": \"${{ github.sha }}\",
+                \"branch\": \"${{ github.ref_name }}\",
+                \"new_files\": \"${{ steps.detect.outputs.new_files }}\"
               }
-            }')
+            }")
           echo "Run ID: $(echo $JOB_RUN | jq .run_id)"
+          echo "run_id=$(echo $JOB_RUN | jq .run_id)" >> $GITHUB_OUTPUT
+        id: trigger
 
-      - name: Wait for job completion (optional)
+      - name: Wait for job completion
+        if: steps.detect.outputs.new_files != ''
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          RUN_ID=$(curl -sf -X POST ... | jq .run_id)  # capture from above
+          RUN_ID=${{ steps.trigger.outputs.run_id }}
           while true; do
-            STATE=$(curl -sf \
+            RESULT=$(curl -sf \
               "${DATABRICKS_HOST}/api/2.1/jobs/runs/get?run_id=${RUN_ID}" \
-              -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
-              | jq -r '.state.life_cycle_state')
-            echo "State: $STATE"
-            [[ "$STATE" == "TERMINATED" || "$STATE" == "SKIPPED" ]] && break
+              -H "Authorization: Bearer ${DATABRICKS_TOKEN}")
+            STATE=$(echo $RESULT | jq -r '.state.life_cycle_state')
+            RESULT_STATE=$(echo $RESULT | jq -r '.state.result_state')
+            echo "State: $STATE | Result: $RESULT_STATE"
+            if [[ "$STATE" == "TERMINATED" || "$STATE" == "SKIPPED" ]]; then
+              [[ "$RESULT_STATE" != "SUCCESS" ]] && exit 1
+              break
+            fi
             sleep 30
           done
