@@ -20,6 +20,49 @@ jobs:
       - name: Install Databricks CLI
         run: pip install databricks-cli
 
+      - name: Debug - Check secrets are set
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_JOB_ID: ${{ secrets.DATABRICKS_JOB_ID }}
+        run: |
+          echo "DATABRICKS_HOST length: ${#DATABRICKS_HOST}"
+          echo "DATABRICKS_TOKEN length: ${#DATABRICKS_TOKEN}"
+          echo "DATABRICKS_JOB_ID length: ${#DATABRICKS_JOB_ID}"
+          if [ -z "$DATABRICKS_HOST" ]; then echo "ERROR: DATABRICKS_HOST is empty!"; fi
+          if [ -z "$DATABRICKS_TOKEN" ]; then echo "ERROR: DATABRICKS_TOKEN is empty!"; fi
+          if [ -z "$DATABRICKS_JOB_ID" ]; then echo "ERROR: DATABRICKS_JOB_ID is empty!"; fi
+
+      - name: Debug - Test connectivity to Databricks host
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+        run: |
+          echo "Testing connection to Databricks host..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${DATABRICKS_HOST}/api/2.0/clusters/list" || echo "CURL_FAILED")
+          echo "HTTP response code: $HTTP_CODE"
+          if [ "$HTTP_CODE" = "CURL_FAILED" ]; then
+            echo "ERROR: Could not reach host. Check DATABRICKS_HOST format."
+          elif [ "$HTTP_CODE" = "000" ]; then
+            echo "ERROR: No response. Host is unreachable or URL is wrong."
+          elif [ "$HTTP_CODE" = "401" ]; then
+            echo "Host is reachable. Token is invalid or expired."
+          elif [ "$HTTP_CODE" = "200" ]; then
+            echo "Host is reachable and token is valid!"
+          else
+            echo "Host returned HTTP $HTTP_CODE"
+          fi
+
+      - name: Debug - Verify token with Databricks API
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          echo "Listing Databricks jobs to verify auth..."
+          RESPONSE=$(curl -s -X GET \
+            "${DATABRICKS_HOST}/api/2.1/jobs/list?limit=5" \
+            -H "Authorization: Bearer ${DATABRICKS_TOKEN}")
+          echo "Jobs API response: $RESPONSE"
+
       - name: Detect changed files
         id: detect
         run: |
@@ -32,6 +75,7 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
+          echo "Triggering job ID: ${{ secrets.DATABRICKS_JOB_ID }}"
           databricks jobs run-now \
             --job-id ${{ secrets.DATABRICKS_JOB_ID }} \
             --notebook-params "{\"commit_sha\":\"${{ github.sha }}\",\"changed_files\":\"${{ steps.detect.outputs.changed }}\"}"
