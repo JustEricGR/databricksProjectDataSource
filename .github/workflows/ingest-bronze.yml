@@ -32,7 +32,7 @@ jobs:
         run: |
           echo "Triggering Databricks job ID: $DATABRICKS_JOB_ID"
           echo "Host: $DATABRICKS_HOST"
-          RESPONSE=$(curl -s -X POST \
+          RESPONSE=$(curl -s -w "\n__HTTP_STATUS__%{http_code}" -X POST \
             "${DATABRICKS_HOST}/api/2.1/jobs/runs/now" \
             -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
             -H "Content-Type: application/json" \
@@ -42,8 +42,12 @@ jobs:
                 \"commit_sha\": \"${{ github.sha }}\",
                 \"changed_files\": \"${{ steps.detect.outputs.changed }}\"
               }
-            }")
-          echo "Databricks response: $RESPONSE"
+            }" 2>&1)
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "__HTTP_STATUS__" | sed 's/__HTTP_STATUS__//')
+          BODY=$(echo "$RESPONSE" | grep -v "__HTTP_STATUS__")
+          echo "HTTP Status: $HTTP_STATUS"
+          echo "Databricks response: $BODY"
+          RESPONSE="$BODY"
           RUN_ID=$(echo $RESPONSE | jq -r '.run_id // "null"')
           echo "Run ID: $RUN_ID"
           if [ "$RUN_ID" = "null" ]; then
