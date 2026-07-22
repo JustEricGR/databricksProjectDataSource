@@ -17,6 +17,9 @@ jobs:
         with:
           fetch-depth: 2
 
+      - name: Install Databricks CLI
+        run: pip install databricks-cli
+
       - name: Detect changed files
         id: detect
         run: |
@@ -28,29 +31,7 @@ jobs:
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          DATABRICKS_JOB_ID: ${{ secrets.DATABRICKS_JOB_ID }}
         run: |
-          echo "Triggering Databricks job ID: $DATABRICKS_JOB_ID"
-          echo "Host: $DATABRICKS_HOST"
-          RESPONSE=$(curl -s -w "\n__HTTP_STATUS__%{http_code}" -X POST \
-            "${DATABRICKS_HOST}/api/2.1/jobs/runs/now" \
-            -H "Authorization: Bearer ${DATABRICKS_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"job_id\": ${DATABRICKS_JOB_ID},
-              \"notebook_params\": {
-                \"commit_sha\": \"${{ github.sha }}\",
-                \"changed_files\": \"${{ steps.detect.outputs.changed }}\"
-              }
-            }" 2>&1)
-          HTTP_STATUS=$(echo "$RESPONSE" | grep "__HTTP_STATUS__" | sed 's/__HTTP_STATUS__//')
-          BODY=$(echo "$RESPONSE" | grep -v "__HTTP_STATUS__")
-          echo "HTTP Status: $HTTP_STATUS"
-          echo "Databricks response: $BODY"
-          RESPONSE="$BODY"
-          RUN_ID=$(echo $RESPONSE | jq -r '.run_id // "null"')
-          echo "Run ID: $RUN_ID"
-          if [ "$RUN_ID" = "null" ]; then
-            echo "ERROR: Job was not triggered. Check the response above."
-            exit 1
-          fi
+          databricks jobs run-now \
+            --job-id ${{ secrets.DATABRICKS_JOB_ID }} \
+            --notebook-params "{\"commit_sha\":\"${{ github.sha }}\",\"changed_files\":\"${{ steps.detect.outputs.changed }}\"}"
