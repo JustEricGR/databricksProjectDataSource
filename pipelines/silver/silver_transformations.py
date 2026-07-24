@@ -262,3 +262,16 @@ def silver_business_operations_2023_climate():
         if dict(df.dtypes)[col_name] == 'string':
             df = df.withColumn(col_name, clean_string(F.col(col_name)))
     return df
+
+# COMMAND ----------
+
+@dp.materialized_view(
+    name="silver_v2_annual_enterprise_survey_2025_financial_year_provisional_size_bands",
+    comment="Silver layer: Cleaned annual enterprise survey 2025 size bands data"
+)
+def silver_annual_enterprise_survey_size_bands():
+    df = spark.read.table("dataingestionproject.bronze.annual_enterprise_survey_2025_financial_year_provisional_size_bands")
+    for col_name in df.columns:
+        if dict(df.dtypes)[col_name] == 'string':
+            df = df.withColumn(col_name, clean_string(F.col(col_name)))
+    return df
