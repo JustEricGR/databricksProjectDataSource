@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "databricks": {
+      "type": "stdio",
+      "command": "C:\\Users\\uik11839\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+      "args": [
+        "${workspaceFolder}\\.claude\\mcp-servers\\databricks_server.py"
+      ],
+      "env": {
+        "DATABRICKS_HOST": "https://dbc-668c3188-0e15.cloud.databricks.com",
+        "DATABRICKS_CONFIG_FILE": "C:\\Users\\uik11839\\.databrickscfg"
+      }
+    }
+  }
+}

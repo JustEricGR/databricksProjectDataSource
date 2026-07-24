@@ -55,6 +55,7 @@ def create_table_function(csv_info):
     )
     def ingest_table():
         pdf = pd.read_csv(download_url, encoding='latin-1')
+        pdf = pdf.loc[:, ~pdf.columns.str.startswith('Unnamed:')]
         return spark.createDataFrame(pdf)
 
     return ingest_table

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(databricks *)",
+      "Bash(powershell.exe -Command \"& 'C:\\Users\\uik11839\\AppData\\Local\\Python\\pythoncore-3.14-64\\Scripts\\databricks.exe' *\")"
+    ]
+  },
+  "env": {
+    "DATABRICKS_HOST": "https://dbc-668c3188-0e15.cloud.databricks.com",
+    "DATABRICKS_CONFIG_FILE": "C:\\Users\\uik11839\\.databrickscfg"
+  }
+}
