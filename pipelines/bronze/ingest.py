@@ -56,6 +56,8 @@ def create_table_function(csv_info):
     def ingest_table():
         pdf = pd.read_csv(download_url, encoding='latin-1')
         pdf = pdf.loc[:, ~pdf.columns.str.startswith('Unnamed:')]
+        # Strip UTF-8 BOM that appears as ï»¿ when latin-1 decoded
+        pdf.columns = pdf.columns.str.replace(r'^ï»¿', '', regex=True).str.strip()
         return spark.createDataFrame(pdf)
 
     return ingest_table

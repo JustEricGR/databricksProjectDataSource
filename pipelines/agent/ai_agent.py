@@ -1,16 +1,19 @@
 # Databricks notebook source
-# AI Agent: Smart Silver & Gold Layer Orchestrator
+# AI Agent: Smart Silver & Gold Layer Orchestrator + Dashboard Generator
 #
 # Triggered as the "ai_agent" task in the dataProcessing job, after silver
 # completes and before gold runs. Responsibilities:
 #
 #   1. Detect bronze tables that have no silver counterpart →
-#      call Claude to generate smart DLT Python transforms →
+#      call Llama to generate smart DLT Python transforms →
 #      append to the silver notebook → trigger & await silver pipeline refresh.
 #
 #   2. Detect silver tables that have no gold views →
-#      call Claude to generate analytical SQL views →
+#      call Llama to generate analytical SQL views →
 #      append to the gold SQL file.
+#
+#   3. Smart-update Databricks Lakeview dashboards for all gold views →
+#      group by domain → only add widgets for views not already present.
 #
 # The gold DLT pipeline runs after this task and picks up any new SQL.
 
@@ -297,6 +300,163 @@ else:
 
 # COMMAND ----------
 
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 3 — Smart Lakeview dashboard update
+# ══════════════════════════════════════════════════════════════════════════════
+
+WH_ID = spark.conf.get("spark.databricks.sqlWarehouseId", "")
+
+DOMAIN_PATTERNS = {
+    "Customer Analytics": ["gold_customer_", "gold_cust_", "gold_loc_"],
+    "Product Analytics":  ["gold_product_", "gold_products_", "gold_prd_", "gold_px_"],
+    "Sales Analytics":    ["gold_sales_", "gold_daily_", "gold_monthly_", "gold_order_", "gold_top_", "gold_fact_sales"],
+    "Survey Analytics":   ["gold_enterprise_", "gold_business_", "gold_climate_", "gold_survey_", "gold_student_", "gold_automobile_"],
+}
+
+def classify_view(view_name):
+    for domain, patterns in DOMAIN_PATTERNS.items():
+        if any(view_name.startswith(p) for p in patterns):
+            return domain
+    return "Other"
+
+def list_lakeview_dashboards():
+    r = _db_api("GET", "/api/2.0/lakeview/dashboards", params={"page_size": 100})
+    return r.get("results", [])
+
+def get_lakeview_dashboard(dashboard_id):
+    return _db_api("GET", f"/api/2.0/lakeview/dashboards/{dashboard_id}")
+
+def create_lakeview_dashboard(display_name):
+    empty_spec = json.dumps({
+        "pages": [{"name": "Page_1", "displayName": display_name, "layout": []}],
+        "datasets": []
+    })
+    body = {"display_name": display_name, "serialized_dashboard": empty_spec}
+    if WH_ID:
+        body["warehouse_id"] = WH_ID
+    return _db_api("POST", "/api/2.0/lakeview/dashboards", body=body)
+
+def update_lakeview_dashboard(dashboard_id, spec_dict):
+    body = {"serialized_dashboard": json.dumps(spec_dict)}
+    return _db_api("PUT", f"/api/2.0/lakeview/dashboards/{dashboard_id}", body=body)
+
+def get_or_create_dashboard(display_name, existing_dashboards):
+    for d in existing_dashboards:
+        if d.get("display_name") == display_name:
+            return d["dashboard_id"]
+    created = create_lakeview_dashboard(display_name)
+    return created.get("dashboard_id")
+
+def make_dataset_name(view_name):
+    return f"ds_{view_name}"[:64]
+
+def make_widget(view_name, col_idx, schema_info):
+    ds_name = make_dataset_name(view_name)
+    label   = view_name.replace("_", " ").title()
+    x = (col_idx % 2) * 6
+    y = (col_idx // 2) * 6
+
+    # Decide widget type from schema
+    numeric_cols = [c for c in schema_info if c["type"] in ("int","bigint","double","float","decimal","long")]
+    string_cols  = [c for c in schema_info if c["type"] == "string"]
+    use_bar = len(string_cols) >= 1 and len(numeric_cols) >= 1
+
+    if use_bar:
+        spec = {
+            "version": 2,
+            "widgetType": "bar",
+            "encodings": {
+                "x": {"fieldName": string_cols[0]["name"], "displayName": string_cols[0]["name"]},
+                "y": [{"fieldName": numeric_cols[0]["name"], "displayName": numeric_cols[0]["name"]}]
+            }
+        }
+    else:
+        spec = {
+            "version": 2,
+            "widgetType": "table",
+            "encodings": {"columns": {"fieldName": "__query__"}}
+        }
+
+    return {
+        "widget": {
+            "name": f"w_{view_name}"[:64],
+            "title": label,
+            "queries": [{"name": "main_query", "query": {"datasetName": ds_name, "fields": []}}],
+            "spec": spec
+        },
+        "position": {"x": x, "y": y, "width": 6, "height": 6}
+    }
+
+def smart_update_dashboard(dashboard_id, gold_views_in_domain):
+    dash   = get_lakeview_dashboard(dashboard_id)
+    raw    = dash.get("serialized_dashboard", "{}")
+    spec   = json.loads(raw) if raw else {}
+    if "pages" not in spec:
+        spec["pages"] = [{"name": "Page_1", "displayName": "Main", "layout": []}]
+    if "datasets" not in spec:
+        spec["datasets"] = []
+
+    # Views already in the dashboard
+    existing_views = {ds["query"].split(".")[-1].strip() for ds in spec["datasets"]}
+
+    new_views = [v for v in gold_views_in_domain if v not in existing_views]
+    if not new_views:
+        return 0
+
+    page   = spec["pages"][0]
+    layout = page.get("layout", [])
+    widget_count = len(layout)
+
+    for view_name in new_views:
+        try:
+            schema_info, _ = get_schema_and_sample("gold", view_name)
+        except Exception:
+            schema_info = []
+
+        ds_name = make_dataset_name(view_name)
+        spec["datasets"].append({
+            "name":        ds_name,
+            "displayName": view_name.replace("_", " ").title(),
+            "query":       f"SELECT * FROM {CATALOG}.gold.{view_name} LIMIT 500"
+        })
+
+        widget_entry = make_widget(view_name, widget_count, schema_info)
+        layout.append(widget_entry)
+        widget_count += 1
+        print(f"    + {view_name}")
+
+    page["layout"] = layout
+    update_lakeview_dashboard(dashboard_id, spec)
+    return len(new_views)
+
+# Group all gold views by domain
+all_gold = list_tables("gold")
+domain_map = {}
+for view in all_gold:
+    domain = classify_view(view)
+    domain_map.setdefault(domain, []).append(view)
+
+print(f"\nGold views by domain:")
+for domain, views in domain_map.items():
+    print(f"  {domain}: {len(views)} views")
+
+# Get existing dashboards once
+existing_dashboards = list_lakeview_dashboards()
+total_widgets_added = 0
+
+for domain, views in domain_map.items():
+    print(f"\nUpdating dashboard: {domain}")
+    try:
+        dash_id = get_or_create_dashboard(domain, existing_dashboards)
+        added   = smart_update_dashboard(dash_id, views)
+        print(f"  Added {added} new widget(s)")
+        total_widgets_added += added
+    except Exception as e:
+        print(f"  ERROR on {domain}: {e}")
+
+# COMMAND ----------
+
 print("\n✓ AI agent complete.")
 print(f"  Silver transforms added : {len(silver_blocks)}")
 print(f"  Gold view blocks added  : {len(gold_blocks)}")
+print(f"  Dashboard widgets added : {total_widgets_added}")
