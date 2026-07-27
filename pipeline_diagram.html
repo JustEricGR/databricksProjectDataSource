@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Databricks Pipeline — dataProcessing</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3350;
+    --text: #e8eaf0;
+    --muted: #8b90a8;
+    --bronze: #cd7f32;
+    --bronze-dim: #7a4a1c;
+    --silver: #a0a8c0;
+    --silver-dim: #4a5070;
+    --gold: #f0b429;
+    --gold-dim: #6b4e0a;
+    --github: #6e7bf0;
+    --github-dim: #2a3080;
+    --arrow: #4a5070;
+    --tag-bg: #1e2235;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 13px;
+    min-height: 100vh;
+    padding: 32px 24px 48px;
+  }
+
+  header {
+    margin-bottom: 36px;
+  }
+  header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.3px;
+  }
+  header p {
+    color: var(--muted);
+    margin-top: 4px;
+    font-size: 12.5px;
+  }
+
+  /* ── layout ── */
+  .flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  /* ── connector ── */
+  .connector {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    padding: 2px 0;
+  }
+  .connector-line {
+    width: 2px;
+    height: 28px;
+    background: var(--arrow);
+  }
+  .connector-label {
+    font-size: 10px;
+    color: var(--muted);
+    background: var(--bg);
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+
+  /* ── stage card ── */
+  .stage {
+    border-radius: 12px;
+    border: 1.5px solid var(--border);
+    background: var(--surface);
+    overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .stage:hover { border-color: var(--silver-dim); }
+
+  .stage-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    cursor: default;
+  }
+  .stage-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .stage-title { font-weight: 600; font-size: 14px; }
+  .stage-subtitle { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .stage-badge {
+    margin-left: auto;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 20px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+
+  /* ── source ── */
+  .source-stage .stage-icon { background: var(--github-dim); color: var(--github); }
+  .source-stage .stage-title { color: var(--github); }
+  .source-stage .stage-badge { background: var(--github-dim); color: var(--github); }
+  .source-stage:hover { border-color: var(--github); }
+
+  /* ── bronze ── */
+  .bronze-stage .stage-icon { background: var(--bronze-dim); color: var(--bronze); }
+  .bronze-stage .stage-title { color: var(--bronze); }
+  .bronze-stage .stage-badge { background: var(--bronze-dim); color: var(--bronze); }
+  .bronze-stage:hover { border-color: var(--bronze); }
+
+  /* ── silver ── */
+  .silver-stage .stage-icon { background: var(--silver-dim); color: var(--silver); }
+  .silver-stage .stage-title { color: var(--silver); }
+  .silver-stage .stage-badge { background: var(--silver-dim); color: var(--silver); }
+  .silver-stage:hover { border-color: var(--silver); }
+
+  /* ── gold ── */
+  .gold-stage .stage-icon { background: var(--gold-dim); color: var(--gold); }
+  .gold-stage .stage-title { color: var(--gold); }
+  .gold-stage .stage-badge { background: var(--gold-dim); color: var(--gold); }
+  .gold-stage:hover { border-color: var(--gold); }
+
+  /* ── stage body ── */
+  .stage-body { padding: 16px 18px; }
+
+  /* ── transforms row ── */
+  .transforms {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+  .transform-tag {
+    background: var(--tag-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 9px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .transform-tag.highlight {
+    border-color: var(--silver-dim);
+    color: var(--silver);
+    background: rgba(74, 80, 112, 0.3);
+  }
+
+  /* ── tables grid ── */
+  .tables-label {
+    font-size: 10.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+  .tables-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 5px;
+  }
+  .table-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 9px;
+    font-size: 11.5px;
+    cursor: default;
+    transition: border-color 0.12s, background 0.12s;
+    position: relative;
+  }
+  .table-chip:hover { border-color: var(--silver-dim); background: #262a40; }
+  .table-chip .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .bronze-dot { background: var(--bronze); }
+  .silver-dot { background: var(--silver); }
+
+  /* ── gold domains ── */
+  .domains-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .domain {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 13px;
+    transition: border-color 0.12s;
+  }
+  .domain:hover { border-color: var(--gold-dim); }
+  .domain-header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 9px;
+  }
+  .domain-icon { font-size: 14px; }
+  .domain-name { font-weight: 600; font-size: 12px; color: var(--gold); }
+  .domain-count {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--muted);
+    background: var(--gold-dim);
+    color: var(--gold);
+    border-radius: 10px;
+    padding: 1px 7px;
+    font-weight: 600;
+  }
+  .domain-views {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .domain-view {
+    font-size: 11px;
+    color: var(--muted);
+    padding: 2px 0;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .domain-view::before {
+    content: '';
+    width: 4px; height: 4px;
+    border-radius: 50%;
+    background: var(--gold-dim);
+    flex-shrink: 0;
+  }
+
+  /* ── tooltip ── */
+  .tooltip {
+    display: none;
+    position: absolute;
+    z-index: 100;
+    background: #1c2035;
+    border: 1px solid #3a4060;
+    border-radius: 8px;
+    padding: 9px 12px;
+    font-size: 11px;
+    color: var(--text);
+    white-space: nowrap;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  .table-chip:hover .tooltip { display: block; }
+  .tooltip-row { color: var(--muted); margin-top: 2px; }
+  .tooltip-row span { color: var(--text); }
+
+  /* ── stat row ── */
+  .stats {
+    display: flex;
+    gap: 20px;
+    padding: 10px 18px;
+    border-top: 1px solid var(--border);
+    background: rgba(0,0,0,0.15);
+  }
+  .stat { display: flex; flex-direction: column; gap: 1px; }
+  .stat-val { font-size: 16px; font-weight: 700; }
+  .stat-lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+  .bronze-val { color: var(--bronze); }
+  .silver-val { color: var(--silver); }
+  .gold-val { color: var(--gold); }
+
+  /* ── job banner ── */
+  .job-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    margin-bottom: 24px;
+    max-width: 1100px;
+    margin-left: auto;
+    margin-right: auto;
+    margin-bottom: 24px;
+  }
+  .job-banner svg { flex-shrink: 0; }
+  .job-name { font-weight: 600; font-size: 13px; }
+  .job-meta { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .job-id { margin-left: auto; font-size: 10px; color: var(--muted); font-family: monospace; }
+
+  .arrow-down {
+    text-align: center;
+    color: var(--arrow);
+    font-size: 18px;
+    line-height: 1;
+    padding: 2px 0;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Databricks Pipeline Architecture</h1>
+  <p>Data flow from GitHub source through Bronze → Silver → Gold layers</p>
+</header>
+
+<!-- Job banner -->
+<div class="job-banner">
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+    <rect width="20" height="20" rx="5" fill="#2a3080"/>
+    <path d="M5 7h10M5 10h7M5 13h9" stroke="#6e7bf0" stroke-width="1.5" stroke-linecap="round"/>
+  </svg>
+  <div>
+    <div class="job-name">dataProcessing</div>
+    <div class="job-meta">Databricks Job &nbsp;·&nbsp; 3 tasks &nbsp;·&nbsp; Sequential execution &nbsp;·&nbsp; bronze → silver → gold</div>
+  </div>
+  <div class="job-id">job_id: 991415638038079</div>
+</div>
+
+<div class="flow">
+
+  <!-- ── SOURCE ── -->
+  <div class="stage source-stage">
+    <div class="stage-header">
+      <div class="stage-icon">⬡</div>
+      <div>
+        <div class="stage-title">GitHub Repository</div>
+        <div class="stage-subtitle">JustEricGR/databricksProjectDataSource</div>
+      </div>
+      <div class="stage-badge">Source</div>
+    </div>
+    <div class="stage-body">
+      <div class="transforms">
+        <div class="transform-tag">14 CSV files</div>
+        <div class="transform-tag">Authenticated via Databricks Secret (scope: github)</div>
+        <div class="transform-tag">GitHub Contents API</div>
+        <div class="transform-tag">Triggered on push to main</div>
+      </div>
+      <div class="tables-label">CSV files in repo root</div>
+      <div class="tables-grid">
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>dim_customers.csv</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>dim_products.csv</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>fact_sales.csv</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>cust_info.csv</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>cust_az12.csv</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>loc_a101.csv</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>prd_info.csv</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>px_cat_g1v2.csv</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>sales_details.csv</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>annual_enterprise_survey_2025…</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>annual_enterprise_survey_2025…_size_bands</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>business_ops_survey_2022_finance</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>business_ops_survey_2023_practices</div>
+        <div class="table-chip"><span class="dot" style="background:var(--github)"></span>business_ops_survey_2023_climate</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- connector -->
+  <div class="connector">
+    <div class="connector-line"></div>
+    <div class="connector-label">DLT Pipeline · data_ingestion_git</div>
+    <div class="connector-line"></div>
+  </div>
+
+  <!-- ── BRONZE ── -->
+  <div class="stage bronze-stage">
+    <div class="stage-header">
+      <div class="stage-icon">⬡</div>
+      <div>
+        <div class="stage-title">Bronze Layer</div>
+        <div class="stage-subtitle">dataingestionproject.bronze &nbsp;·&nbsp; Raw ingestion via Delta Live Tables</div>
+      </div>
+      <div class="stage-badge">Bronze</div>
+    </div>
+    <div class="stage-body">
+      <div class="transforms">
+        <div class="transform-tag highlight">pandas.read_csv (latin-1)</div>
+        <div class="transform-tag highlight">Drop Unnamed: columns</div>
+        <div class="transform-tag highlight">spark.createDataFrame</div>
+        <div class="transform-tag">@dp.table decorator per CSV</div>
+        <div class="transform-tag">Auto-schema inference</div>
+        <div class="transform-tag">Delta format</div>
+      </div>
+      <div class="tables-label">14 raw Delta tables — dataingestionproject.bronze</div>
+      <div class="tables-grid">
+        <div class="table-chip">
+          <span class="dot bronze-dot"></span>dim_customers
+          <div class="tooltip">
+            <strong>dim_customers</strong>
+            <div class="tooltip-row">Rows: <span>18,484</span></div>
+            <div class="tooltip-row">Source: dim_customers.csv</div>
+          </div>
+        </div>
+        <div class="table-chip">
+          <span class="dot bronze-dot"></span>dim_products
+          <div class="tooltip">
+            <strong>dim_products</strong>
+            <div class="tooltip-row">Rows: <span>295</span></div>
+            <div class="tooltip-row">Source: dim_products.csv</div>
+          </div>
+        </div>
+        <div class="table-chip">
+          <span class="dot bronze-dot"></span>fact_sales
+          <div class="tooltip">
+            <strong>fact_sales</strong>
+            <div class="tooltip-row">Rows: <span>60,398</span></div>
+            <div class="tooltip-row">Source: fact_sales.csv</div>
+          </div>
+        </div>
+        <div class="table-chip"><span class="dot bronze-dot"></span>cust_info</div>
+        <div class="table-chip"><span class="dot bronze-dot"></span>cust_az12</div>
+        <div class="table-chip"><span class="dot bronze-dot"></span>loc_a101</div>
+        <div class="table-chip"><span class="dot bronze-dot"></span>prd_info</div>
+        <div class="table-chip"><span class="dot bronze-dot"></span>px_cat_g1v2</div>
+        <div class="table-chip"><span class="dot bronze-dot"></span>sales_details</div>
+        <div class="table-chip"><span class="dot bronze-dot"></span>annual_enterprise_survey_2025…</div>
+        <div class="table-chip"><span class="dot bronze-dot"></span>annual_enterprise_survey_2025…_size_bands</div>
+        <div class="table-chip"><span class="dot bronze-dot"></span>business_ops_survey_2022_finance</div>
+        <div class="table-chip"><span class="dot bronze-dot"></span>business_ops_survey_2023_practices</div>
+        <div class="table-chip"><span class="dot bronze-dot"></span>business_ops_survey_2023_climate</div>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="stat-val bronze-val">60,398</div><div class="stat-lbl">Sales records</div></div>
+      <div class="stat"><div class="stat-val bronze-val">18,484</div><div class="stat-lbl">Customers</div></div>
+      <div class="stat"><div class="stat-val bronze-val">295</div><div class="stat-lbl">Products</div></div>
+      <div class="stat"><div class="stat-val bronze-val">14</div><div class="stat-lbl">Tables</div></div>
+    </div>
+  </div>
+
+  <!-- connector -->
+  <div class="connector">
+    <div class="connector-line"></div>
+    <div class="connector-label">DLT Pipeline · silver_transformations</div>
+    <div class="connector-line"></div>
+  </div>
+
+  <!-- ── SILVER ── -->
+  <div class="stage silver-stage">
+    <div class="stage-header">
+      <div class="stage-icon">⬡</div>
+      <div>
+        <div class="stage-title">Silver Layer</div>
+        <div class="stage-subtitle">dataingestionproject.silver &nbsp;·&nbsp; Cleaned & standardized materialized views</div>
+      </div>
+      <div class="stage-badge">Silver</div>
+    </div>
+    <div class="stage-body">
+      <div class="transforms">
+        <div class="transform-tag highlight">Date → DD/MM/YYYY (multi-format)</div>
+        <div class="transform-tag highlight">Gender → Female / Male</div>
+        <div class="transform-tag highlight">String trim + whitespace collapse</div>
+        <div class="transform-tag highlight">Null key filtering</div>
+        <div class="transform-tag">Empty required field removal</div>
+        <div class="transform-tag">@dp.materialized_view per table</div>
+      </div>
+      <div class="tables-label">14 cleaned tables — dataingestionproject.silver</div>
+      <div class="tables-grid">
+        <div class="table-chip">
+          <span class="dot silver-dot"></span>silver_v2_dim_customers
+          <div class="tooltip">
+            <strong>silver_v2_dim_customers</strong>
+            <div class="tooltip-row">Rows: <span>18,469</span></div>
+            <div class="tooltip-row">Dropped: <span>15 (null gender / key)</span></div>
+          </div>
+        </div>
+        <div class="table-chip">
+          <span class="dot silver-dot"></span>silver_v2_dim_products
+          <div class="tooltip">
+            <strong>silver_v2_dim_products</strong>
+            <div class="tooltip-row">Rows: <span>295</span></div>
+            <div class="tooltip-row">Dropped: <span>0</span></div>
+          </div>
+        </div>
+        <div class="table-chip">
+          <span class="dot silver-dot"></span>silver_v2_fact_sales
+          <div class="tooltip">
+            <strong>silver_v2_fact_sales</strong>
+            <div class="tooltip-row">Rows: <span>60,379</span></div>
+            <div class="tooltip-row">Dropped: <span>19 (null dates)</span></div>
+          </div>
+        </div>
+        <div class="table-chip"><span class="dot silver-dot"></span>silver_v2_cust_info</div>
+        <div class="table-chip"><span class="dot silver-dot"></span>silver_v2_cust_az12</div>
+        <div class="table-chip"><span class="dot silver-dot"></span>silver_v2_loc_a101</div>
+        <div class="table-chip"><span class="dot silver-dot"></span>silver_v2_prd_info</div>
+        <div class="table-chip"><span class="dot silver-dot"></span>silver_v2_px_cat_g1v2</div>
+        <div class="table-chip"><span class="dot silver-dot"></span>silver_v2_sales_details</div>
+        <div class="table-chip"><span class="dot silver-dot"></span>silver_v2_annual_enterprise_survey…</div>
+        <div class="table-chip"><span class="dot silver-dot"></span>silver_v2_annual_enterprise_survey…_size_bands</div>
+        <div class="table-chip"><span class="dot silver-dot"></span>silver_v2_business_ops_2022_finance</div>
+        <div class="table-chip"><span class="dot silver-dot"></span>silver_v2_business_ops_2023_practices</div>
+        <div class="table-chip"><span class="dot silver-dot"></span>silver_v2_business_ops_2023_climate</div>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="stat-val silver-val">60,379</div><div class="stat-lbl">Sales records</div></div>
+      <div class="stat"><div class="stat-val silver-val">18,469</div><div class="stat-lbl">Customers</div></div>
+      <div class="stat"><div class="stat-val silver-val">34</div><div class="stat-lbl">Records dropped</div></div>
+      <div class="stat"><div class="stat-val silver-val">14</div><div class="stat-lbl">Tables</div></div>
+    </div>
+  </div>
+
+  <!-- connector -->
+  <div class="connector">
+    <div class="connector-line"></div>
+    <div class="connector-label">DLT Pipeline · gold_analytics (SQL)</div>
+    <div class="connector-line"></div>
+  </div>
+
+  <!-- ── GOLD ── -->
+  <div class="stage gold-stage">
+    <div class="stage-header">
+      <div class="stage-icon">⬡</div>
+      <div>
+        <div class="stage-title">Gold Layer</div>
+        <div class="stage-subtitle">dataingestionproject.gold &nbsp;·&nbsp; Aggregated analytical views (SQL)</div>
+      </div>
+      <div class="stage-badge">Gold</div>
+    </div>
+    <div class="stage-body">
+      <div class="transforms">
+        <div class="transform-tag highlight">CREATE OR REFRESH MATERIALIZED VIEW</div>
+        <div class="transform-tag highlight">Joins across dimensions & facts</div>
+        <div class="transform-tag highlight">GROUP BY aggregations</div>
+        <div class="transform-tag">Window functions (ranking, LTV)</div>
+        <div class="transform-tag">38 analytical views</div>
+      </div>
+
+      <div class="tables-label" style="margin-bottom:10px">4 analytical domains — dataingestionproject.gold</div>
+
+      <div class="domains-grid">
+
+        <!-- customers -->
+        <div class="domain">
+          <div class="domain-header">
+            <span class="domain-icon">👤</span>
+            <span class="domain-name">Customer Analytics</span>
+            <span class="domain-count">9 views</span>
+          </div>
+          <div class="domain-views">
+            <div class="domain-view">gold_customer_summary</div>
+            <div class="domain-view">gold_customers_by_country</div>
+            <div class="domain-view">gold_customer_demographics</div>
+            <div class="domain-view">gold_customer_lifetime_value</div>
+            <div class="domain-view">gold_top_customers</div>
+            <div class="domain-view">gold_cust_info_demographics</div>
+            <div class="domain-view">gold_cust_info_segmentation</div>
+            <div class="domain-view">gold_cust_az12_by_gender</div>
+            <div class="domain-view">gold_cust_az12_demographics</div>
+          </div>
+        </div>
+
+        <!-- products -->
+        <div class="domain">
+          <div class="domain-header">
+            <span class="domain-icon">📦</span>
+            <span class="domain-name">Product Analytics</span>
+            <span class="domain-count">8 views</span>
+          </div>
+          <div class="domain-views">
+            <div class="domain-view">gold_product_summary</div>
+            <div class="domain-view">gold_products_by_category</div>
+            <div class="domain-view">gold_products_by_subcategory</div>
+            <div class="domain-view">gold_top_products</div>
+            <div class="domain-view">gold_prd_info_summary</div>
+            <div class="domain-view">gold_prd_info_by_line</div>
+            <div class="domain-view">gold_px_cat_summary</div>
+            <div class="domain-view">gold_px_cat_by_category / _subcategory</div>
+          </div>
+        </div>
+
+        <!-- sales -->
+        <div class="domain">
+          <div class="domain-header">
+            <span class="domain-icon">📈</span>
+            <span class="domain-name">Sales Analytics</span>
+            <span class="domain-count">11 views</span>
+          </div>
+          <div class="domain-views">
+            <div class="domain-view">gold_sales_summary</div>
+            <div class="domain-view">gold_monthly_sales</div>
+            <div class="domain-view">gold_daily_sales</div>
+            <div class="domain-view">gold_sales_by_category</div>
+            <div class="domain-view">gold_sales_by_country</div>
+            <div class="domain-view">gold_order_fulfillment</div>
+            <div class="domain-view">gold_sales_details_summary</div>
+            <div class="domain-view">gold_sales_details_top_customers</div>
+            <div class="domain-view">gold_sales_details_top_products</div>
+            <div class="domain-view">gold_loc_a101_by_country</div>
+          </div>
+        </div>
+
+        <!-- surveys -->
+        <div class="domain">
+          <div class="domain-header">
+            <span class="domain-icon">📋</span>
+            <span class="domain-name">Survey Analytics</span>
+            <span class="domain-count">10 views</span>
+          </div>
+          <div class="domain-views">
+            <div class="domain-view">gold_enterprise_survey_by_industry</div>
+            <div class="domain-view">gold_enterprise_survey_by_category</div>
+            <div class="domain-view">gold_enterprise_survey_trends</div>
+            <div class="domain-view">gold_business_finance_2022_by_industry</div>
+            <div class="domain-view">gold_business_finance_2022_by_size</div>
+            <div class="domain-view">gold_business_finance_2022_matrix</div>
+            <div class="domain-view">gold_business_practices_2023_by_industry</div>
+            <div class="domain-view">gold_business_practices_2023_by_size</div>
+            <div class="domain-view">gold_climate_2023_by_industry</div>
+            <div class="domain-view">gold_climate_2023_by_size</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="stat-val gold-val">$29.35M</div><div class="stat-lbl">Total revenue</div></div>
+      <div class="stat"><div class="stat-val gold-val">38</div><div class="stat-lbl">Gold views</div></div>
+      <div class="stat"><div class="stat-val gold-val">4</div><div class="stat-lbl">Domains</div></div>
+      <div class="stat"><div class="stat-val gold-val">6</div><div class="stat-lbl">Markets</div></div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

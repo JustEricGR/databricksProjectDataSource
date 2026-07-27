@@ -8,13 +8,13 @@ import pandas as pd
 # COMMAND ----------
 
 GITHUB_REPO = "JustEricGR/databricksProjectDataSource"
-GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/"
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/dataSource"
 
 GITHUB_TOKEN = dbutils.secrets.get(scope="github", key="token")
 
 
-# Get the newly committed file passed from GitHub Actions
-new_file = spark.conf.get("changed_files", "")
+# Get the newly committed file passed from GitHub Actions (may include folder prefix)
+new_file = os.path.basename(spark.conf.get("changed_files", ""))
 
 headers = {}
 if GITHUB_TOKEN:
@@ -24,7 +24,7 @@ try:
     response = requests.get(GITHUB_API_URL, headers=headers)
     response.raise_for_status()
     contents = response.json()
-    
+
     all_csv_files = [item for item in contents if isinstance(item, dict) and item.get("name", "").endswith(".csv")]
 
     # Filter to only the newly committed file if specified

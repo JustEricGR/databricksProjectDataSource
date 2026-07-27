@@ -6,7 +6,7 @@ on:
     branches:
       - main
     paths:
-      - '**.csv'
+      - 'dataSource/**.csv'
 
 jobs:
   trigger-databricks:
@@ -66,7 +66,7 @@ jobs:
       - name: Detect changed files
         id: detect
         run: |
-          CHANGED=$(git diff --name-only HEAD~1 HEAD -- '*.csv')
+          CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'dataSource/*.csv' | xargs -I{} basename {})
           echo "Changed CSV files: $CHANGED"
           echo "changed=${CHANGED}" >> $GITHUB_OUTPUT
 
