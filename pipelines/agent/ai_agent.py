@@ -72,14 +72,15 @@ def read_workspace_file(path):
 
 def write_workspace_file(path, content, is_notebook=False):
     encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
-    body = {"path": path, "format": "SOURCE", "content": encoded, "overwrite": True}
     if is_notebook:
-        body["language"] = "PYTHON"
+        # NOTEBOOK type: overwrite in place with SOURCE format
+        body = {"path": path, "format": "SOURCE", "language": "PYTHON",
+                "content": encoded, "overwrite": True}
     else:
-        # FILE type: delete first, then recreate
+        # FILE type (.sql, .py raw file): delete then recreate with AUTO format
         _db_api("POST", "/api/2.0/workspace/delete",
                 body={"path": path, "recursive": False})
-        body["overwrite"] = False
+        body = {"path": path, "format": "AUTO", "content": encoded}
     result = _db_api("POST", "/api/2.0/workspace/import", body=body)
     if "error" in result:
         raise RuntimeError(f"Could not write {path}: {result['error']}")
