@@ -145,7 +145,12 @@ def ask_claude(prompt, max_tokens=2048):
     )
     with urllib.request.urlopen(req, timeout=120) as r:
         result = json.loads(r.read())
-    return result["choices"][0]["message"]["content"].strip()
+    raw = result["choices"][0]["message"]["content"].strip()
+    # Strip markdown code fences Llama sometimes wraps output in
+    import re as _re
+    raw = _re.sub(r'^```(?:python|sql)?\s*\n', '', raw, flags=_re.MULTILINE)
+    raw = _re.sub(r'\n```\s*$', '', raw, flags=_re.MULTILINE)
+    return raw.strip()
 
 # COMMAND ----------
 
