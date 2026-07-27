@@ -204,7 +204,8 @@ Sample data (up to 8 rows):
 Rules
 -----
 - Syntax: CREATE OR REFRESH MATERIALIZED VIEW {CATALOG}.gold.<view_name> AS
-- Prefix every view name with gold_
+- Prefix every view name with gold_ followed by a word from the table name, e.g. gold_{table_name}_summary
+- The table name MUST appear in the view name so names stay unique across tables
 - Read from: {CATALOG}.silver.silver_v2_{table_name}
 - Create views that tell a coherent analytical story:
     * A summary/totals view  (counts, sums, averages)
