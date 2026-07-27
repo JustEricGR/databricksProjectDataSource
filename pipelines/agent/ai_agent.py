@@ -309,7 +309,7 @@ else:
 # STEP 3 — Smart Lakeview dashboard update
 # ══════════════════════════════════════════════════════════════════════════════
 
-WH_ID = spark.conf.get("spark.databricks.sqlWarehouseId", "")
+WH_ID = "3ac8cbd811e6e287"  # Serverless Starter Warehouse
 
 DOMAIN_PATTERNS = {
     "Customer Analytics": ["gold_customer_", "gold_cust_", "gold_loc_"],
