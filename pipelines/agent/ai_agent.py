@@ -21,10 +21,7 @@ import urllib.request, urllib.parse, urllib.error
 
 # COMMAND ----------
 
-# Use openai SDK to call the Databricks AI Gateway (OpenAI-compatible endpoint)
-import subprocess
-subprocess.run(["pip", "install", "openai>=1.0.0", "--quiet"], check=True)
-from openai import OpenAI
+# No extra SDK needed — Databricks serving endpoints are called via urllib directly
 
 # COMMAND ----------
 
@@ -41,12 +38,6 @@ GOLD_FILE_PATH     = "/Users/eric.ratiu@gmail.com/goldProcessing/transformations
 # Databricks workspace host and token — no separate provider API key needed
 HOST  = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
-
-# OpenAI-compatible client pointing at the Databricks AI Gateway endpoint
-claude = OpenAI(
-    api_key=TOKEN,
-    base_url=f"{HOST}/serving-endpoints/{GATEWAY_ENDPOINT}/v1",
-)
 
 # COMMAND ----------
 
@@ -132,12 +123,22 @@ def get_schema_and_sample(schema, table, n=8):
 # ── Claude helpers ────────────────────────────────────────────────────────────
 
 def ask_claude(prompt, max_tokens=2048):
-    response = claude.chat.completions.create(
-        model=MODEL,
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
+    body = json.dumps({
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+    }).encode()
+    req = urllib.request.Request(
+        f"{HOST}/serving-endpoints/{GATEWAY_ENDPOINT}/invocations",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type":  "application/json",
+        },
+        method="POST",
     )
-    return response.choices[0].message.content.strip()
+    with urllib.request.urlopen(req, timeout=120) as r:
+        result = json.loads(r.read())
+    return result["choices"][0]["message"]["content"].strip()
 
 # COMMAND ----------
 
