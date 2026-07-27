@@ -32,7 +32,7 @@ GATEWAY_ENDPOINT   = "databricks-meta-llama-3-3-70b-instruct"
 MODEL              = "databricks-meta-llama-3-3-70b-instruct"
 SILVER_PIPELINE_ID = "7c672251-9678-4b57-99ab-063b0e0ffe37"
 GOLD_PIPELINE_ID   = "c5c43b5f-302b-4b55-a95f-4eb6aaf42cea"
-SILVER_FILE_PATH   = "/Users/eric.ratiu@gmail.com/silver_transformations_e1ac5e72/transformations/silver_transformations.py"
+SILVER_FILE_PATH   = "/Users/eric.ratiu@gmail.com/silver_transformations_e1ac5e72/transformations/silver_transformations"
 GOLD_FILE_PATH     = "/Users/eric.ratiu@gmail.com/goldProcessing/transformations/my_transformation.sql"
 
 # Databricks workspace host and token — no separate provider API key needed
@@ -70,14 +70,17 @@ def read_workspace_file(path):
     return base64.b64decode(r["content"]).decode("utf-8")
 
 
-def write_workspace_file(path, content):
-    # Delete then re-upload (FILE type does not support in-place overwrite)
-    _db_api("POST", "/api/2.0/workspace/delete",
-            body={"path": path, "recursive": False})
+def write_workspace_file(path, content, is_notebook=False):
     encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
-    result = _db_api("POST", "/api/2.0/workspace/import", body={
-        "path": path, "format": "AUTO", "content": encoded,
-    })
+    body = {"path": path, "format": "SOURCE", "content": encoded, "overwrite": True}
+    if is_notebook:
+        body["language"] = "PYTHON"
+    else:
+        # FILE type: delete first, then recreate
+        _db_api("POST", "/api/2.0/workspace/delete",
+                body={"path": path, "recursive": False})
+        body["overwrite"] = False
+    result = _db_api("POST", "/api/2.0/workspace/import", body=body)
     if "error" in result:
         raise RuntimeError(f"Could not write {path}: {result['error']}")
 
@@ -238,7 +241,7 @@ for table in new_for_silver:
 
 if silver_blocks:
     current = read_workspace_file(SILVER_FILE_PATH)
-    write_workspace_file(SILVER_FILE_PATH, current + "".join(silver_blocks))
+    write_workspace_file(SILVER_FILE_PATH, current + "".join(silver_blocks), is_notebook=True)
     print(f"\nAppended {len(silver_blocks)} transform(s) to silver notebook")
 
     uid = trigger_pipeline(SILVER_PIPELINE_ID)
