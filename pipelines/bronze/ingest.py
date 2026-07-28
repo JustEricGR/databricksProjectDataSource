@@ -12,6 +12,19 @@ GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/dataSourc
 
 GITHUB_TOKEN = dbutils.secrets.get(scope="github", key="token")
 
+# ── Metastore quota guard ─────────────────────────────────────────────────────
+# Each DLT table = 2 UC objects (table + backing). Hard limit = 500.
+# Stop ingestion cleanly before hitting it.
+METASTORE_SAFE_LIMIT = 490
+_metastore_count = spark.sql(
+    "SELECT COUNT(*) FROM system.information_schema.tables"
+).collect()[0][0]
+print(f"Metastore objects: {_metastore_count}/{METASTORE_SAFE_LIMIT}")
+if _metastore_count >= METASTORE_SAFE_LIMIT:
+    raise RuntimeError(
+        f"Metastore quota near limit ({_metastore_count}/{METASTORE_SAFE_LIMIT}). "
+        "Drop unused tables before ingesting new CSVs."
+    )
 
 # Support space-separated list of changed files from GitHub Actions
 # e.g. "fileA.csv fileB.csv" when multiple CSVs change in one push

@@ -32,7 +32,8 @@ SILVER_PIPELINE_ID  = "7c672251-9678-4b57-99ab-063b0e0ffe37"
 GOLD_PIPELINE_ID    = "c5c43b5f-302b-4b55-a95f-4eb6aaf42cea"
 SILVER_FILE_PATH    = "/Users/eric.ratiu@gmail.com/silver_transformations_e1ac5e72/transformations/silver_transformations"
 GOLD_FILE_PATH      = "/Users/eric.ratiu@gmail.com/goldProcessing/transformations/my_transformation.sql"
-UC_GOLD_VIEW_LIMIT  = 80   # each DLT MV = 2 UC objects; safe ceiling below ~200 quota
+UC_GOLD_VIEW_LIMIT   = 80   # each DLT MV = 2 UC objects; safe ceiling below ~200 quota
+METASTORE_SAFE_LIMIT = 490  # hard metastore limit is 500; stop before hitting it
 
 # Databricks workspace host and token — no separate provider API key needed
 HOST  = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
@@ -302,6 +303,17 @@ else:
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 2 — Gold gap detection & smart SQL generation
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Metastore quota check before generating new gold views
+_metastore_count = spark.sql(
+    "SELECT COUNT(*) FROM system.information_schema.tables"
+).collect()[0][0]
+print(f"\nMetastore objects: {_metastore_count}/{METASTORE_SAFE_LIMIT}")
+if _metastore_count >= METASTORE_SAFE_LIMIT:
+    print(f"Metastore near limit — skipping gold generation to avoid overflow.")
+    new_for_gold, gold_blocks, new_gold_view_names = [], [], []
+else:
+    pass  # proceed below
 
 silver_tables_full  = list_tables("silver")
 gold_tables_catalog = list_tables("gold")
