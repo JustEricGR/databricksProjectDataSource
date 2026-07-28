@@ -316,6 +316,25 @@ else:
 
 WH_ID = "3ac8cbd811e6e287"  # Serverless Starter Warehouse
 
+# ── Workspace budget limits ───────────────────────────────────────────────────
+# Keeps dashboard costs predictable on a Serverless Starter Warehouse.
+MAX_WIDGETS_PER_DASHBOARD = 8   # max widgets shown per domain dashboard
+MAX_TOTAL_WIDGETS         = 30  # hard cap across ALL dashboards combined
+
+# Views whose name ends with these suffixes are high-value; others are skipped
+# when the per-dashboard cap is reached. Order = priority (highest first).
+PRIORITY_SUFFIXES = [
+    "_summary", "_demographics", "_by_country", "_by_category",
+    "_monthly_sales", "_by_industry", "_top_customers", "_top_products",
+    "_by_gender", "_by_size", "_segmentation", "_lifetime_value",
+]
+
+def priority_score(view_name):
+    for i, suffix in enumerate(PRIORITY_SUFFIXES):
+        if view_name.endswith(suffix):
+            return len(PRIORITY_SUFFIXES) - i  # higher = more important
+    return 0  # not a priority view — only included if budget allows
+
 DOMAIN_PATTERNS = {
     "Customer Analytics": ["gold_customer_", "gold_cust_", "gold_loc_"],
     "Product Analytics":  ["gold_product_", "gold_products_", "gold_prd_", "gold_px_"],
@@ -397,7 +416,11 @@ def make_widget(view_name, col_idx, schema_info):
         "position": {"x": x, "y": y, "width": 6, "height": 6}
     }
 
-def smart_update_dashboard(dashboard_id, gold_views_in_domain):
+def smart_update_dashboard(dashboard_id, gold_views_in_domain, global_budget):
+    """
+    global_budget: dict with key 'remaining' — decremented as widgets are added.
+    Returns number of widgets added.
+    """
     dash   = get_lakeview_dashboard(dashboard_id)
     raw    = dash.get("serialized_dashboard", "{}")
     spec   = json.loads(raw) if raw else {}
@@ -406,18 +429,27 @@ def smart_update_dashboard(dashboard_id, gold_views_in_domain):
     if "datasets" not in spec:
         spec["datasets"] = []
 
-    # Views already in the dashboard
+    # Views already in this dashboard
     existing_views = {ds["query"].split(".")[-1].strip() for ds in spec["datasets"]}
+    current_count  = len(spec["pages"][0].get("layout", []))
 
+    # Filter to new views only, sorted by priority (highest first)
     new_views = [v for v in gold_views_in_domain if v not in existing_views]
-    if not new_views:
-        return 0
+    new_views.sort(key=priority_score, reverse=True)
+
+    # Apply per-dashboard cap and global cap
+    slots_in_dashboard = max(0, MAX_WIDGETS_PER_DASHBOARD - current_count)
+    candidates = new_views[:slots_in_dashboard]
 
     page   = spec["pages"][0]
     layout = page.get("layout", [])
-    widget_count = len(layout)
+    added  = 0
 
-    for view_name in new_views:
+    for view_name in candidates:
+        if global_budget["remaining"] <= 0:
+            print(f"    (global widget budget exhausted — skipping {view_name})")
+            break
+
         try:
             schema_info, _ = get_schema_and_sample("gold", view_name)
         except Exception:
@@ -430,14 +462,21 @@ def smart_update_dashboard(dashboard_id, gold_views_in_domain):
             "query":       f"SELECT * FROM {CATALOG}.gold.{view_name} LIMIT 500"
         })
 
-        widget_entry = make_widget(view_name, widget_count, schema_info)
+        widget_entry = make_widget(view_name, current_count + added, schema_info)
         layout.append(widget_entry)
-        widget_count += 1
-        print(f"    + {view_name}")
+        added += 1
+        global_budget["remaining"] -= 1
+        score = priority_score(view_name)
+        print(f"    + {view_name}  (priority={score})")
 
-    page["layout"] = layout
-    update_lakeview_dashboard(dashboard_id, spec)
-    return len(new_views)
+    skipped = len(new_views) - added
+    if skipped > 0:
+        print(f"    Skipped {skipped} lower-priority views (budget/cap)")
+
+    if added > 0:
+        page["layout"] = layout
+        update_lakeview_dashboard(dashboard_id, spec)
+    return added
 
 # Group all gold views by domain
 all_gold = list_tables("gold")
@@ -453,12 +492,18 @@ for domain, views in domain_map.items():
 # Get existing dashboards once
 existing_dashboards = list_lakeview_dashboards()
 total_widgets_added = 0
+global_budget = {"remaining": MAX_TOTAL_WIDGETS}
+
+print(f"\nDashboard budget: max {MAX_WIDGETS_PER_DASHBOARD} per domain, {MAX_TOTAL_WIDGETS} total")
 
 for domain, views in domain_map.items():
-    print(f"\nUpdating dashboard: {domain}")
+    if global_budget["remaining"] <= 0:
+        print(f"\nSkipping {domain} — global widget budget exhausted")
+        continue
+    print(f"\nUpdating dashboard: {domain}  ({len(views)} views, {global_budget['remaining']} slots left)")
     try:
         dash_id = get_or_create_dashboard(domain, existing_dashboards)
-        added   = smart_update_dashboard(dash_id, views)
+        added   = smart_update_dashboard(dash_id, views, global_budget)
         print(f"  Added {added} new widget(s)")
         total_widgets_added += added
     except Exception as e:
