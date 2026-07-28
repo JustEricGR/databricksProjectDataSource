@@ -270,11 +270,21 @@ else:
 # ══════════════════════════════════════════════════════════════════════════════
 
 silver_tables_full = list_tables("silver")
-gold_tables        = list_tables("gold")
+gold_tables_catalog = list_tables("gold")
+
+# Also read view names already defined in the gold SQL file
+# (catalog may lag behind if the pipeline last failed)
+import re as _re_gold
+_gold_sql   = read_workspace_file(GOLD_FILE_PATH)
+gold_in_sql = set(_re_gold.findall(
+    r'MATERIALIZED VIEW\s+[\w.`]+\.([\w`]+)', _gold_sql, _re_gold.IGNORECASE
+))
+gold_in_sql = {n.strip('`') for n in gold_in_sql}
+gold_all    = set(gold_tables_catalog) | gold_in_sql   # union: catalog + SQL file
 
 # A silver table is "covered" if any gold view name contains its bare table name
 silver_covered = set()
-for gt in gold_tables:
+for gt in gold_all:
     for st in silver_tables_full:
         if st.replace("silver_v2_", "") in gt:
             silver_covered.add(st)
@@ -302,8 +312,23 @@ for table in new_for_gold:
 
 if gold_blocks:
     current = read_workspace_file(GOLD_FILE_PATH)
-    write_workspace_file(GOLD_FILE_PATH, current + "".join(gold_blocks))
-    print(f"\nAppended {len(gold_blocks)} gold SQL block(s) to gold file")
+    combined = current + "".join(gold_blocks)
+
+    # Deduplicate — last-write-wins for any duplicate view name
+    import re as _re_dedup
+    all_blocks = _re_dedup.split(r'(?=CREATE OR REFRESH MATERIALIZED VIEW)', combined, flags=_re_dedup.IGNORECASE)
+    all_blocks = [b.strip() for b in all_blocks if b.strip()]
+    seen_names, deduped = {}, []
+    for block in all_blocks:
+        m    = _re_dedup.search(r'MATERIALIZED VIEW\s+[\w.`]+\.([\w`]+)', block, _re_dedup.IGNORECASE)
+        name = m.group(1).strip('`') if m else None
+        if name not in seen_names:
+            seen_names[name] = True
+            deduped.append(block)
+    combined = '\n\n'.join(deduped) + '\n'
+
+    write_workspace_file(GOLD_FILE_PATH, combined)
+    print(f"\nAppended {len(gold_blocks)} gold SQL block(s) to gold file ({len(deduped)} unique views total)")
     print("Gold DLT pipeline will pick up changes on its next run.")
 else:
     print("No new gold views needed.")
