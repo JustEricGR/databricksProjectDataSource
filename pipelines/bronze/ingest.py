@@ -13,8 +13,10 @@ GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/dataSourc
 GITHUB_TOKEN = dbutils.secrets.get(scope="github", key="token")
 
 
-# Get the newly committed file passed from GitHub Actions (may include folder prefix)
-new_file = os.path.basename(spark.conf.get("changed_files", ""))
+# Support space-separated list of changed files from GitHub Actions
+# e.g. "fileA.csv fileB.csv" when multiple CSVs change in one push
+_changed_raw = spark.conf.get("changed_files", "").strip()
+new_files = {os.path.basename(f) for f in _changed_raw.split() if f.strip()} if _changed_raw else set()
 
 headers = {}
 if GITHUB_TOKEN:
@@ -27,11 +29,14 @@ try:
 
     all_csv_files = [item for item in contents if isinstance(item, dict) and item.get("name", "").endswith(".csv")]
 
-    # Filter to only the newly committed file if specified
-    if new_file:
-        csv_files = [f for f in all_csv_files if f["name"] == new_file]
+    # Filter to only the newly committed files when triggered by a push;
+    # fall back to all CSVs on manual runs (empty changed_files param)
+    if new_files:
+        csv_files = [f for f in all_csv_files if f["name"] in new_files]
+        print(f"Incremental mode: processing {[f['name'] for f in csv_files]}")
     else:
         csv_files = all_csv_files
+        print(f"Full mode: processing all {len(csv_files)} CSVs")
 
     if not csv_files:
         raise ValueError(f"No CSV files found in repository {GITHUB_REPO}")

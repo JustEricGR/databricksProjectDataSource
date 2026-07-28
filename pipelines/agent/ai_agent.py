@@ -1,25 +1,20 @@
 # Databricks notebook source
 # AI Agent: Smart Silver & Gold Layer Orchestrator + Dashboard Generator
 #
-# Triggered as the "ai_agent" task in the dataProcessing job, after silver
-# completes and before gold runs. Responsibilities:
+# Triggered as the "ai_agent" task in the dataProcessing job (bronze → silver → ai_agent).
+# Responsibilities:
+#   1. Detect bronze tables without silver transforms → generate & apply selectively.
+#   2. Detect silver tables without gold views → generate SQL → trigger SELECTIVE
+#      gold DLT refresh (only new views, not all 90 → ~75% time saving).
+#   2b. Cross-table join analysis: ask Llama if new + existing tables can be joined.
+#   3. Smart-update Lakeview dashboards (budget-capped).
+#   4. Sync changed files back to GitHub.
 #
-#   1. Detect bronze tables that have no silver counterpart →
-#      call Llama to generate smart DLT Python transforms →
-#      append to the silver notebook → trigger & await silver pipeline refresh.
-#
-#   2. Detect silver tables that have no gold views →
-#      call Llama to generate analytical SQL views →
-#      append to the gold SQL file.
-#
-#   3. Smart-update Databricks Lakeview dashboards for all gold views →
-#      group by domain → only add widgets for views not already present.
-#
-# The gold DLT pipeline runs after this task and picks up any new SQL.
+# Fast-path: if nothing new is detected, agent exits in <5s.
 
 # COMMAND ----------
 
-import os, json, base64, time
+import os, re, json, base64, time
 import urllib.request, urllib.parse, urllib.error
 
 # COMMAND ----------
@@ -33,10 +28,11 @@ CATALOG            = "dataingestionproject"
 # Databricks Foundation Model API — no external API key or endpoint setup needed
 GATEWAY_ENDPOINT   = "databricks-meta-llama-3-3-70b-instruct"
 MODEL              = "databricks-meta-llama-3-3-70b-instruct"
-SILVER_PIPELINE_ID = "7c672251-9678-4b57-99ab-063b0e0ffe37"
-GOLD_PIPELINE_ID   = "c5c43b5f-302b-4b55-a95f-4eb6aaf42cea"
-SILVER_FILE_PATH   = "/Users/eric.ratiu@gmail.com/silver_transformations_e1ac5e72/transformations/silver_transformations"
-GOLD_FILE_PATH     = "/Users/eric.ratiu@gmail.com/goldProcessing/transformations/my_transformation.sql"
+SILVER_PIPELINE_ID  = "7c672251-9678-4b57-99ab-063b0e0ffe37"
+GOLD_PIPELINE_ID    = "c5c43b5f-302b-4b55-a95f-4eb6aaf42cea"
+SILVER_FILE_PATH    = "/Users/eric.ratiu@gmail.com/silver_transformations_e1ac5e72/transformations/silver_transformations"
+GOLD_FILE_PATH      = "/Users/eric.ratiu@gmail.com/goldProcessing/transformations/my_transformation.sql"
+UC_GOLD_VIEW_LIMIT  = 80   # each DLT MV = 2 UC objects; safe ceiling below ~200 quota
 
 # Databricks workspace host and token — no separate provider API key needed
 HOST  = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
@@ -105,6 +101,35 @@ def wait_for_pipeline(pipeline_id, update_id, timeout_s=600):
         if state in terminal:
             return state
     return "TIMEOUT"
+
+def trigger_gold_selective(view_names, timeout_s=600):
+    """Refresh ONLY the specified new views — not all 90.  Massive time saving."""
+    r = _db_api("POST", f"/api/2.0/pipelines/{GOLD_PIPELINE_ID}/updates",
+                body={"full_refresh_selection": view_names})
+    uid = r.get("update_id")
+    if not uid:
+        print(f"  Could not start selective gold refresh: {r}")
+        return "FAILED"
+    print(f"  Selective gold refresh triggered (update {uid[:8]}) for {len(view_names)} view(s)")
+    return wait_for_pipeline(GOLD_PIPELINE_ID, uid, timeout_s)
+
+
+def validate_gold_sql(block, existing_names):
+    """Return list of error strings; empty = valid."""
+    errors = []
+    if not block.rstrip().endswith(";"):
+        errors.append("Missing trailing semicolon")
+    m = re.search(r'MATERIALIZED VIEW\s+[\w.`]+\.([\w`]+)', block, re.IGNORECASE)
+    if m:
+        name = m.group(1).strip("`")
+        if name in existing_names:
+            errors.append(f"Duplicate view name: {name}")
+    # Detect lateral alias in WINDOW ORDER BY (common Llama mistake)
+    aliases = re.findall(r'\bAS\s+(\w+)', block, re.IGNORECASE)
+    for alias in aliases:
+        if re.search(rf'ORDER\s+BY\s+[^)]*\b{re.escape(alias)}\b', block, re.IGNORECASE | re.DOTALL):
+            errors.append(f"Possible lateral alias '{alias}' in WINDOW ORDER BY")
+    return errors
 
 # COMMAND ----------
 
@@ -199,7 +224,8 @@ Rules
 
 # ── Gold view generator ───────────────────────────────────────────────────────
 
-def generate_gold_views(table_name, schema_info, sample_rows):
+def generate_gold_views(table_name, schema_info, sample_rows, existing_view_names=None):
+    existing_str = ", ".join(sorted(existing_view_names or [])[:30])
     prompt = f"""You are a senior data engineer. Generate 2–4 Databricks SQL materialized views
 for the gold analytics layer. Output only the SQL statements — no prose, no markdown fences.
 
@@ -212,17 +238,25 @@ Sample data (up to 8 rows):
 Rules
 -----
 - Syntax: CREATE OR REFRESH MATERIALIZED VIEW {CATALOG}.gold.<view_name> AS
-- Prefix every view name with gold_ followed by a word from the table name, e.g. gold_{table_name}_summary
-- The table name MUST appear in the view name so names stay unique across tables
+- Prefix every view name with gold_{table_name}_ so names are globally unique
+- Do NOT use any of these already-existing view names: {existing_str}
 - Read from: {CATALOG}.silver.silver_v2_{table_name}
 - Create views that tell a coherent analytical story:
     * A summary/totals view  (counts, sums, averages)
     * A breakdown by the most meaningful categorical dimension
     * A time-series view     if date columns exist
     * A top-N ranking view   if numeric metrics exist
-- Use proper GROUP BY, ORDER BY, COUNT/SUM/AVG/RANK
-- Choose view names that describe what they answer (e.g. gold_survey_by_industry)
-- Separate statements with a semicolon. Output only SQL.
+
+CRITICAL SQL QUALITY RULES — violations break the pipeline:
+1. Every CREATE statement MUST end with a semicolon (;)
+2. All GROUP BY columns MUST appear in SELECT
+3. NEVER reference a column alias inside a WINDOW ORDER BY — repeat the full expression:
+   BAD:  SUM(x) AS total, RANK() OVER (ORDER BY total DESC)
+   GOOD: SUM(x) AS total, RANK() OVER (ORDER BY SUM(x) DESC)
+4. Every column in SELECT must exist in the source table schema above
+5. Separate multiple statements with a semicolon on its own line
+
+Output only SQL, nothing else.
 """
     return ask_claude(prompt, max_tokens=2000)
 
@@ -269,20 +303,15 @@ else:
 # STEP 2 — Gold gap detection & smart SQL generation
 # ══════════════════════════════════════════════════════════════════════════════
 
-silver_tables_full = list_tables("silver")
+silver_tables_full  = list_tables("silver")
 gold_tables_catalog = list_tables("gold")
 
-# Also read view names already defined in the gold SQL file
-# (catalog may lag behind if the pipeline last failed)
-import re as _re_gold
+# Union catalog + SQL file to detect already-covered views
 _gold_sql   = read_workspace_file(GOLD_FILE_PATH)
-gold_in_sql = set(_re_gold.findall(
-    r'MATERIALIZED VIEW\s+[\w.`]+\.([\w`]+)', _gold_sql, _re_gold.IGNORECASE
-))
-gold_in_sql = {n.strip('`') for n in gold_in_sql}
-gold_all    = set(gold_tables_catalog) | gold_in_sql   # union: catalog + SQL file
+gold_in_sql = {n.strip("`") for n in re.findall(
+    r'MATERIALIZED VIEW\s+[\w.`]+\.([\w`]+)', _gold_sql, re.IGNORECASE)}
+gold_all = set(gold_tables_catalog) | gold_in_sql
 
-# A silver table is "covered" if any gold view name contains its bare table name
 silver_covered = set()
 for gt in gold_all:
     for st in silver_tables_full:
@@ -292,46 +321,125 @@ for gt in gold_all:
 new_for_gold = [t for t in silver_tables_full if t not in silver_covered]
 print(f"\nSilver tables without gold views: {new_for_gold or 'None'}")
 
-gold_blocks = []
-for table in new_for_gold:
-    print(f"\n→ Generating gold views for: {table}")
-    try:
-        schema_info, sample_rows = get_schema_and_sample("silver", table)
-        sql = generate_gold_views(table.replace("silver_v2_", ""), schema_info, sample_rows)
-        # Ensure every CREATE statement ends with a semicolon
-        import re as _re2
-        sql = _re2.sub(r'(?<!\;)\s*\n(?=CREATE OR REFRESH)', ';\n', sql, flags=_re2.IGNORECASE)
-        if not sql.rstrip().endswith(';'):
-            sql = sql.rstrip() + ';'
-        gold_blocks.append(
-            f"\n-- ── AI Generated: {table} ───────────────────────────────────\n{sql}\n"
-        )
-        print("  Done")
-    except Exception as e:
-        print(f"  ERROR generating gold views for {table}: {e}")
-
-if gold_blocks:
-    current = read_workspace_file(GOLD_FILE_PATH)
-    combined = current + "".join(gold_blocks)
-
-    # Deduplicate — last-write-wins for any duplicate view name
-    import re as _re_dedup
-    all_blocks = _re_dedup.split(r'(?=CREATE OR REFRESH MATERIALIZED VIEW)', combined, flags=_re_dedup.IGNORECASE)
-    all_blocks = [b.strip() for b in all_blocks if b.strip()]
-    seen_names, deduped = {}, []
-    for block in all_blocks:
-        m    = _re_dedup.search(r'MATERIALIZED VIEW\s+[\w.`]+\.([\w`]+)', block, _re_dedup.IGNORECASE)
-        name = m.group(1).strip('`') if m else None
-        if name not in seen_names:
-            seen_names[name] = True
-            deduped.append(block)
-    combined = '\n\n'.join(deduped) + '\n'
-
-    write_workspace_file(GOLD_FILE_PATH, combined)
-    print(f"\nAppended {len(gold_blocks)} gold SQL block(s) to gold file ({len(deduped)} unique views total)")
-    print("Gold DLT pipeline will pick up changes on its next run.")
+# ── Fast-path: nothing to do ──────────────────────────────────────────────────
+if not new_for_silver and not new_for_gold:
+    print("\nNothing new detected — skipping gold generation and refresh.")
+    gold_blocks, new_gold_view_names = [], []
 else:
-    print("No new gold views needed.")
+    # ── Generate gold views ───────────────────────────────────────────────────
+    gold_blocks, new_gold_view_names = [], []
+    all_known_names = set(gold_all)   # passed to prompt to prevent duplicates
+
+    for table in new_for_gold:
+        print(f"\n→ Generating gold views for: {table}")
+        try:
+            schema_info, sample_rows = get_schema_and_sample("silver", table)
+            sql = generate_gold_views(
+                table.replace("silver_v2_", ""), schema_info, sample_rows,
+                existing_view_names=all_known_names
+            )
+            # Enforce semicolons between and after statements
+            sql = re.sub(r'(?<!;)\s*\n(?=CREATE OR REFRESH)', ';\n', sql, flags=re.IGNORECASE)
+            if not sql.rstrip().endswith(";"):
+                sql = sql.rstrip() + ";"
+
+            # Validate before accepting
+            errors = validate_gold_sql(sql, all_known_names)
+            if errors:
+                print(f"  SKIPPED (validation errors): {errors}")
+                continue
+
+            # Track new view names for selective refresh
+            for m in re.finditer(r'MATERIALIZED VIEW\s+[\w.`]+\.([\w`]+)', sql, re.IGNORECASE):
+                vname = m.group(1).strip("`")
+                new_gold_view_names.append(vname)
+                all_known_names.add(vname)
+
+            gold_blocks.append(
+                f"\n-- ── AI Generated: {table} ───────────────────────────────────\n{sql}\n"
+            )
+            print(f"  Done → {len(new_gold_view_names)} views so far")
+        except Exception as e:
+            print(f"  ERROR generating gold views for {table}: {e}")
+
+    # ── Step 2b: Cross-table join analysis ───────────────────────────────────
+    if new_for_gold and gold_tables_catalog:
+        print("\n→ Analyzing cross-table join opportunities...")
+        try:
+            join_prompt = f"""You are a senior data engineer. Analyze if any of the new silver tables
+can be meaningfully joined with existing gold catalog tables to produce useful cross-table analytics.
+
+New silver tables: {[t.replace('silver_v2_', '') for t in new_for_gold]}
+Sample of existing gold views: {sorted(gold_tables_catalog)[:25]}
+
+Rules:
+- Only suggest a join if there is a clear shared key (customer_key, product_key, order_number, etc.)
+- Suggest at most 2 cross-table views
+- If no meaningful join exists, output exactly: NO_JOIN
+- View names must start with gold_cross_ and not duplicate existing names
+- Follow all SQL quality rules: end with semicolon, no lateral alias in WINDOW ORDER BY
+- Read from {CATALOG}.silver.* and {CATALOG}.gold.*
+Output only valid SQL or NO_JOIN.
+"""
+            join_sql = ask_claude(join_prompt, max_tokens=1200)
+            if join_sql.strip() != "NO_JOIN" and join_sql.strip():
+                join_sql = join_sql.rstrip()
+                if not join_sql.endswith(";"):
+                    join_sql += ";"
+                errors = validate_gold_sql(join_sql, all_known_names)
+                if not errors:
+                    gold_blocks.append(f"\n-- ── AI Cross-table joins ───────────────────────────────────\n{join_sql}\n")
+                    for m in re.finditer(r'MATERIALIZED VIEW\s+[\w.`]+\.([\w`]+)', join_sql, re.IGNORECASE):
+                        vname = m.group(1).strip("`")
+                        new_gold_view_names.append(vname)
+                    print(f"  Added cross-table join views")
+                else:
+                    print(f"  Cross-table SQL skipped (validation: {errors})")
+            else:
+                print("  No meaningful cross-table joins found")
+        except Exception as e:
+            print(f"  Cross-table analysis error (non-fatal): {e}")
+
+    # ── UC quota guard + deduplication ───────────────────────────────────────
+    if gold_blocks:
+        uc_mv_count = len(gold_tables_catalog)
+        uc_slots    = max(0, UC_GOLD_VIEW_LIMIT - uc_mv_count)
+        if uc_slots == 0:
+            print(f"\nUC quota reached ({uc_mv_count}/{UC_GOLD_VIEW_LIMIT}) — skipping append.")
+            gold_blocks, new_gold_view_names = [], []
+        elif len(new_gold_view_names) > uc_slots:
+            print(f"\nUC quota: {uc_slots} slots, truncating.")
+            gold_blocks = gold_blocks[:uc_slots]
+            new_gold_view_names = new_gold_view_names[:uc_slots]
+
+    if gold_blocks:
+        current  = read_workspace_file(GOLD_FILE_PATH)
+        combined = current + "".join(gold_blocks)
+
+        # Deduplicate (first-write-wins)
+        all_blks = re.split(r'(?=CREATE OR REFRESH MATERIALIZED VIEW)', combined, flags=re.IGNORECASE)
+        all_blks = [b.strip() for b in all_blks if b.strip()]
+        seen, deduped = {}, []
+        for blk in all_blks:
+            m = re.search(r'MATERIALIZED VIEW\s+[\w.`]+\.([\w`]+)', blk, re.IGNORECASE)
+            n = m.group(1).strip("`") if m else None
+            if n not in seen:
+                seen[n] = True
+                deduped.append(blk)
+        combined = '\n\n'.join(deduped) + '\n'
+
+        write_workspace_file(GOLD_FILE_PATH, combined)
+        print(f"\nAppended {len(gold_blocks)} block(s), {len(deduped)} total unique views in file")
+
+        # ── Selective gold refresh (only new views) — KEY TIME SAVING ────────
+        if new_gold_view_names:
+            print(f"\nSelective gold refresh: {new_gold_view_names}")
+            gold_state = trigger_gold_selective(new_gold_view_names)
+            print(f"Gold selective refresh: {gold_state}")
+            if gold_state != "COMPLETED":
+                print(f"Warning: gold selective refresh ended with {gold_state}")
+    else:
+        print("No new gold views to append.")
 
 # COMMAND ----------
 
@@ -342,9 +450,9 @@ else:
 WH_ID = "3ac8cbd811e6e287"  # Serverless Starter Warehouse
 
 # ── Workspace budget limits ───────────────────────────────────────────────────
-# Keeps dashboard costs predictable on a Serverless Starter Warehouse.
 MAX_WIDGETS_PER_DASHBOARD = 8   # max widgets shown per domain dashboard
 MAX_TOTAL_WIDGETS         = 30  # hard cap across ALL dashboards combined
+# UC_GOLD_VIEW_LIMIT defined in config section above
 
 # Views whose name ends with these suffixes are high-value; others are skipped
 # when the per-dashboard cap is reached. Order = priority (highest first).
@@ -374,8 +482,9 @@ def classify_view(view_name):
     return "Other"
 
 def list_lakeview_dashboards():
-    r = _db_api("GET", "/api/2.0/lakeview/dashboards", params={"page_size": 100})
-    return r.get("results", [])
+    r = _db_api("GET", "/api/2.0/lakeview/dashboards",
+                params={"page_size": 50, "filter_by.keyword": ""})
+    return r.get("dashboards", r.get("results", []))
 
 def get_lakeview_dashboard(dashboard_id):
     return _db_api("GET", f"/api/2.0/lakeview/dashboards/{dashboard_id}")
@@ -402,40 +511,47 @@ def get_or_create_dashboard(display_name, existing_dashboards):
     return created.get("dashboard_id")
 
 def make_dataset_name(view_name):
-    return f"ds_{view_name}"[:64]
+    return f"ds_{view_name}"[:63]
 
 def make_widget(view_name, col_idx, schema_info):
-    ds_name = make_dataset_name(view_name)
-    label   = view_name.replace("_", " ").title()
+    ds_name  = make_dataset_name(view_name)
+    label    = view_name.replace("_", " ").title()
     x = (col_idx % 2) * 6
     y = (col_idx // 2) * 6
 
-    # Decide widget type from schema
-    numeric_cols = [c for c in schema_info if c["type"] in ("int","bigint","double","float","decimal","long")]
-    string_cols  = [c for c in schema_info if c["type"] == "string"]
+    numeric_cols = [c for c in schema_info if any(t in c["type"].lower()
+                   for t in ("int","bigint","double","float","decimal","long"))]
+    string_cols  = [c for c in schema_info if c["type"].lower() == "string"]
     use_bar = len(string_cols) >= 1 and len(numeric_cols) >= 1
 
     if use_bar:
+        xc, yc = string_cols[0]["name"], numeric_cols[0]["name"]
+        fields = [{"name": xc, "expression": f"`{xc}`"},
+                  {"name": yc, "expression": f"`{yc}`"}]
         spec = {
-            "version": 2,
+            "version": 3,
             "widgetType": "bar",
             "encodings": {
-                "x": {"fieldName": string_cols[0]["name"], "displayName": string_cols[0]["name"]},
-                "y": [{"fieldName": numeric_cols[0]["name"], "displayName": numeric_cols[0]["name"]}]
+                "x": {"fieldName": xc, "displayName": xc.replace("_"," ").title()},
+                "y": [{"fieldName": yc, "displayName": yc.replace("_"," ").title()}]
             }
         }
+        disagg = False
     else:
-        spec = {
-            "version": 2,
-            "widgetType": "table",
-            "encodings": {"columns": {"fieldName": "__query__"}}
-        }
+        fields = [{"name": c["name"], "expression": f"`{c['name']}`"}
+                  for c in schema_info[:8]]
+        spec   = {"version": 3, "widgetType": "table"}
+        disagg = True
 
     return {
         "widget": {
-            "name": f"w_{view_name}"[:64],
+            "name":  f"w_{view_name}"[:63],
             "title": label,
-            "queries": [{"name": "main_query", "query": {"datasetName": ds_name, "fields": []}}],
+            "queries": [{"name": "main_query", "query": {
+                "datasetName":   ds_name,
+                "fields":        fields,
+                "disaggregated": disagg,
+            }}],
             "spec": spec
         },
         "position": {"x": x, "y": y, "width": 6, "height": 6}
