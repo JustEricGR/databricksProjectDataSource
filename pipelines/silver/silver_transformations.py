@@ -275,3 +275,88 @@ def silver_annual_enterprise_survey_size_bands():
         if dict(df.dtypes)[col_name] == 'string':
             df = df.withColumn(col_name, clean_string(F.col(col_name)))
     return df
+
+# COMMAND ----------
+
+@dp.materialized_view(name="silver_v2_automobile_dataset", comment="Silver layer: cleaned automobile dataset")
+def silver_v2_automobile_dataset():
+    df = spark.read.table("dataingestionproject.bronze.automobile_dataset")
+
+    # Apply cleaning rules
+    df = df.withColumn("Make", clean_string("Make"))
+    df = df.withColumn("Model", clean_string("Model"))
+    df = df.withColumn("Fuel_Type", clean_string("Fuel_Type"))
+    df = df.withColumn("Transmission", clean_string("Transmission"))
+    df = df.withColumn("Service_History", clean_string("Service_History"))
+    df = df.withColumn("Color", clean_string("Color"))
+    df = df.withColumn("Body_Type", clean_string("Body_Type"))
+    df = df.withColumn("Drivetrain", clean_string("Drivetrain"))
+    df = df.withColumn("Location", clean_string("Location"))
+
+    # Drop rows with null critical fields
+    df = df.filter(df["Make"].isNotNull())
+    df = df.filter(df["Model"].isNotNull())
+    df = df.filter(df["Year"].isNotNull())
+    df = df.filter(df["Selling_Price"].isNotNull())
+
+    return df
+
+# COMMAND ----------
+
+@dp.materialized_view(name="silver_v2_student_performance_dataset", comment="Silver layer: cleaned student performance dataset")
+def silver_v2_student_performance_dataset():
+    return (
+        spark.read.table("dataingestionproject.bronze.student_performance_dataset")
+        .withColumn("gender", standardize_gender(F.col("gender")))
+        .withColumn("gender", F.when(F.col("gender").isNotNull(), F.col("gender")).otherwise(F.lit(None)))
+        .filter(F.col("gender").isNotNull())
+        .withColumn("student_id", F.when(F.col("student_id").isNotNull(), F.col("student_id")).otherwise(F.lit(None)))
+        .filter(F.col("student_id").isNotNull())
+        .withColumn("study_time_hours", F.when(F.col("study_time_hours").isNotNull(), F.col("study_time_hours")).otherwise(F.lit(None)))
+        .filter(F.col("study_time_hours").isNotNull())
+        .withColumn("attendance_percent", F.when(F.col("attendance_percent").isNotNull(), F.col("attendance_percent")).otherwise(F.lit(None)))
+        .filter(F.col("attendance_percent").isNotNull())
+        .withColumn("sleep_hours", F.when(F.col("sleep_hours").isNotNull(), F.col("sleep_hours")).otherwise(F.lit(None)))
+        .filter(F.col("sleep_hours").isNotNull())
+        .withColumn("previous_grade", F.when(F.col("previous_grade").isNotNull(), F.col("previous_grade")).otherwise(F.lit(None)))
+        .filter(F.col("previous_grade").isNotNull())
+        .withColumn("final_exam_score", F.when(F.col("final_exam_score").isNotNull(), F.col("final_exam_score")).otherwise(F.lit(None)))
+        .filter(F.col("final_exam_score").isNotNull())
+        .withColumn("parental_education", clean_string(F.col("parental_education")))
+        .withColumn("internet_access", clean_string(F.col("internet_access")))
+        .withColumn("extracurricular_activities", clean_string(F.col("extracurricular_activities")))
+        .withColumn("part_time_job", clean_string(F.col("part_time_job")))
+        .withColumn("final_grade", clean_string(F.col("final_grade")))
+    )
+
+
+# COMMAND ----------
+
+@dp.materialized_view(name="silver_v2_fifa_world_cup_2026_player_performance", comment="Silver layer: cleaned fifa world cup 2026 player performance data")
+def silver_v2_fifa_world_cup_2026_player_performance():
+    df = spark.read.table("dataingestionproject.bronze.fifa_world_cup_2026_player_performance")
+    
+    # Apply standardize_date on date columns
+    date_columns = [col for col in df.columns if 'date' in col.lower()]
+    for col in date_columns:
+        df = df.withColumn(col, standardize_date(col))
+
+    # Apply standardize_gender on gender columns
+    # No columns suggest gender/sex in this dataset
+
+    # Apply clean_string on string columns
+    string_columns = [col for col in df.columns if df.schema[col].dataType.typeName() == 'StringType']
+    for col in string_columns:
+        df = df.withColumn(col, clean_string(col))
+
+    # Filter nulls on primary-key columns
+    primary_key_columns = [col for col in df.columns if any(keyword in col.lower() for keyword in ['id', 'key', 'number'])]
+    for col in primary_key_columns:
+        df = df.filter(df[col].isNotNull())
+
+    # Filter nulls on critical numeric columns
+    critical_numeric_columns = [col for col in df.columns if df.schema[col].dataType.typeName() in ['IntegerType', 'LongType', 'DoubleType'] and any(keyword in col.lower() for keyword in ['amount', 'quantity', 'goals', 'assists', 'minutes', 'rating', 'score', 'value', 'market_value_eur'])]
+    for col in critical_numeric_columns:
+        df = df.filter(df[col].isNotNull())
+
+    return df

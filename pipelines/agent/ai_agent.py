@@ -288,6 +288,11 @@ for table in new_for_gold:
     try:
         schema_info, sample_rows = get_schema_and_sample("silver", table)
         sql = generate_gold_views(table.replace("silver_v2_", ""), schema_info, sample_rows)
+        # Ensure every CREATE statement ends with a semicolon
+        import re as _re2
+        sql = _re2.sub(r'(?<!\;)\s*\n(?=CREATE OR REFRESH)', ';\n', sql, flags=_re2.IGNORECASE)
+        if not sql.rstrip().endswith(';'):
+            sql = sql.rstrip() + ';'
         gold_blocks.append(
             f"\n-- ── AI Generated: {table} ───────────────────────────────────\n{sql}\n"
         )
@@ -461,7 +466,70 @@ for domain, views in domain_map.items():
 
 # COMMAND ----------
 
+# COMMAND ----------
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 4 — Sync updated workspace files back to GitHub
+# ══════════════════════════════════════════════════════════════════════════════
+
+GITHUB_REPO  = "JustEricGR/databricksProjectDataSource"
+GITHUB_TOKEN = dbutils.secrets.get(scope="github", key="token")
+
+def github_api(method, path, body=None):
+    url  = f"https://api.github.com/repos/{GITHUB_REPO}/{path}"
+    data = json.dumps(body).encode() if body else None
+    req  = urllib.request.Request(url, data=data, headers={
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept":        "application/vnd.github+json",
+        "Content-Type":  "application/json",
+    }, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            raw = r.read(); return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        return {"error": e.read().decode()}
+
+def github_push_file(repo_path, content_str, commit_message):
+    # Get current file SHA (needed for update)
+    existing = github_api("GET", f"contents/{repo_path}")
+    sha = existing.get("sha")  # None if file doesn't exist yet
+    body = {
+        "message": commit_message,
+        "content": base64.b64encode(content_str.encode("utf-8")).decode("utf-8"),
+    }
+    if sha:
+        body["sha"] = sha
+    result = github_api("PUT", f"contents/{repo_path}", body=body)
+    return "error" not in result
+
+synced = []
+if silver_blocks or gold_blocks:
+    # Re-export the files as they now stand in Databricks workspace
+    silver_latest = read_workspace_file(SILVER_FILE_PATH)
+    gold_latest   = read_workspace_file(GOLD_FILE_PATH)
+
+    if silver_blocks:
+        ok = github_push_file(
+            "pipelines/silver/silver_transformations.py",
+            silver_latest,
+            f"agent: add silver transforms for {[t for t in new_for_silver if t in [b for b in silver_blocks]]}"
+        )
+        if ok: synced.append("silver_transformations.py")
+
+    if gold_blocks:
+        ok = github_push_file(
+            "pipelines/gold/my_transformation.sql",
+            gold_latest,
+            f"agent: add gold views for new silver tables"
+        )
+        if ok: synced.append("my_transformation.sql")
+
+print(f"\nGitHub sync: {synced or 'nothing to push'}")
+
+# COMMAND ----------
+
 print("\n✓ AI agent complete.")
 print(f"  Silver transforms added : {len(silver_blocks)}")
 print(f"  Gold view blocks added  : {len(gold_blocks)}")
 print(f"  Dashboard widgets added : {total_widgets_added}")
+print(f"  Files synced to GitHub  : {synced or 'none'}")
