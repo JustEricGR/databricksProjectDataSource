@@ -257,6 +257,14 @@ CRITICAL SQL QUALITY RULES — violations break the pipeline:
    GOOD: SUM(x) AS total, RANK() OVER (ORDER BY SUM(x) DESC)
 4. Every column in SELECT must exist in the source table schema above
 5. Separate multiple statements with a semicolon on its own line
+6. For any column typed STRING that holds numeric data, use TRY_CAST(col AS DOUBLE)
+   and filter with WHERE TRY_CAST(col AS DOUBLE) IS NOT NULL — never plain CAST()
+7. Produce HUMAN-READABLE results: join to get names instead of keys/codes.
+   BAD:  GROUP BY product_key → shows P00123, P00456
+   GOOD: JOIN dim_products ON product_key → GROUP BY product_name
+8. Choose metrics that tell a story: revenue, count, average, percentage — not raw IDs
+9. Always add ORDER BY and LIMIT 20 to keep results focused
+10. Use meaningful column aliases (e.g. AS total_revenue, not AS val1)
 
 Output only SQL, nothing else.
 """

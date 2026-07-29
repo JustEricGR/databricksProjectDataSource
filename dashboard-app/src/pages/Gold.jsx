@@ -7,7 +7,14 @@ export default function Gold() {
 
   useEffect(() => {
     runSQL('SHOW TABLES IN dataingestionproject.gold')
-      .then(rows => setTables(rows.map(r => r.tableName)))
+      .then(rows =>
+        setTables(
+          rows
+            .map(r => r.tableName)
+            // Filter out internal DLT backing tables and event logs
+            .filter(t => !t.startsWith('__') && t !== 'event_log')
+        )
+      )
       .catch(() => {})
   }, [])
 
