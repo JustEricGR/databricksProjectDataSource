@@ -49,10 +49,29 @@ try:
         print(f"Incremental mode: processing {[f['name'] for f in csv_files]}")
     else:
         csv_files = all_csv_files
-        print(f"Full mode: processing all {len(csv_files)} CSVs")
+        print(f"Full mode candidate: {len(csv_files)} CSVs")
+
+    # Skip tables that already exist in bronze — avoids re-ingestion on full runs
+    # and prevents the retry-loop quota overflow that causes 14-min crashes.
+    try:
+        existing_bronze = {
+            r.tableName for r in
+            spark.sql("SHOW TABLES IN dataingestionproject.bronze").collect()
+        }
+    except Exception:
+        existing_bronze = set()
+
+    csv_files = [
+        f for f in csv_files
+        if f["name"].replace(".csv", "").replace("-", "_").lower()
+        not in existing_bronze
+    ]
 
     if not csv_files:
-        raise ValueError(f"No CSV files found in repository {GITHUB_REPO}")
+        print("All CSV tables already exist in bronze — nothing to ingest.")
+        dbutils.notebook.exit("up-to-date")
+
+    print(f"Will ingest {len(csv_files)} new/changed CSV(s): {[f['name'] for f in csv_files]}")
 
 except requests.exceptions.HTTPError as e:
     error_msg = str(e)

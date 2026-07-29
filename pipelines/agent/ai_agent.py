@@ -32,7 +32,8 @@ SILVER_PIPELINE_ID  = "7c672251-9678-4b57-99ab-063b0e0ffe37"
 GOLD_PIPELINE_ID    = "c5c43b5f-302b-4b55-a95f-4eb6aaf42cea"
 SILVER_FILE_PATH    = "/Users/eric.ratiu@gmail.com/silver_transformations_e1ac5e72/transformations/silver_transformations"
 GOLD_FILE_PATH      = "/Users/eric.ratiu@gmail.com/goldProcessing/transformations/my_transformation.sql"
-UC_GOLD_VIEW_LIMIT   = 80   # each DLT MV = 2 UC objects; safe ceiling below ~200 quota
+UC_GOLD_VIEW_LIMIT   = 20   # hybrid architecture: React handles detailed analytics,
+                             # DLT keeps only ~20 key summary views (saves 100+ UC objects)
 METASTORE_SAFE_LIMIT = 490  # hard metastore limit is 500; stop before hitting it
 
 # Databricks workspace host and token — no separate provider API key needed
