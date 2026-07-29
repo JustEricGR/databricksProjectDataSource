@@ -58,14 +58,25 @@ export default function ChartWidget({ query }) {
       .catch(e  => { setError(e.message); setLoading(false) })
   }, [query.sql])
 
-  const h = 220
+  const h = 260
 
   if (loading) return (
-    <div className="flex items-center justify-center h-40 text-muted animate-pulse">Loading…</div>
+    <div className="flex items-center justify-center h-40 text-muted animate-pulse text-sm">Loading…</div>
   )
-  if (error) return (
-    <div className="text-red-400 text-xs p-3 bg-bg rounded">{error}</div>
-  )
+  if (error) {
+    const isNotExist = error.includes('TABLE_DOES_NOT_EXIST') || error.includes('RESOURCE_DOES_NOT_EXIST')
+    return (
+      <div className="flex flex-col items-center justify-center h-28 gap-2 text-center p-3">
+        <span className="text-2xl">{isNotExist ? '⏳' : '⚠️'}</span>
+        <span className="text-sm text-muted">
+          {isNotExist
+            ? 'Pipeline refreshing — data available shortly'
+            : 'Query unavailable'}
+        </span>
+        {!isNotExist && <span className="text-xs text-red-400 max-w-xs truncate">{error}</span>}
+      </div>
+    )
+  }
   if (!data?.length) return (
     <div className="text-muted text-sm p-4 text-center">No data</div>
   )
@@ -73,43 +84,75 @@ export default function ChartWidget({ query }) {
   if (query.chartType === 'kpi')   return <KPIDisplay data={data} />
   if (query.chartType === 'table') return <TableDisplay data={data} />
 
+  // Auto-detect keys if the configured ones don't match actual columns
+  const actualCols = Object.keys(data[0])
+  let xKey = query.xKey
+  let yKey = query.yKey
+
+  if (xKey && !actualCols.includes(xKey)) {
+    // Pick first string-looking column as X
+    xKey = actualCols.find(k => typeof data[0][k] === 'string') || actualCols[0]
+  }
+  if (yKey && !actualCols.includes(yKey)) {
+    // Pick first numeric-looking column as Y
+    yKey = actualCols.find(k => !isNaN(parseFloat(data[0][k])) && typeof data[0][k] !== 'boolean' && k !== xKey)
+        || actualCols.find(k => k !== xKey)
+  }
+  // If still no match, fall back to table
+  if (!xKey || !yKey || xKey === yKey) return <TableDisplay data={data} />
+
   const numericData = data.map(r => ({
     ...r,
-    [query.yKey]: parseFloat(r[query.yKey]) || 0
+    [yKey]: parseFloat(r[yKey]) || 0
   }))
 
-  const xLabel = (v) => {
+  // Truncate only for tooltip labels; X axis gets full text rotated
+  const shortLabel = (v) => {
     const s = String(v ?? '')
-    return s.length > 14 ? s.slice(0, 12) + '…' : s
+    return s.length > 18 ? s.slice(0, 16) + '…' : s
+  }
+
+  const fmtNum = v =>
+    Number(v) >= 1000000 ? `${(Number(v)/1000000).toFixed(1)}M`
+    : Number(v) >= 1000  ? `${(Number(v)/1000).toFixed(0)}K`
+    : String(v)
+
+  const tooltipStyle = {
+    background: '#1a1d27', border: '1px solid #2e3350', borderRadius: 6, fontSize: 12
   }
 
   if (query.chartType === 'pie') return (
     <ResponsiveContainer width="100%" height={h}>
       <PieChart>
-        <Pie data={numericData} dataKey={query.yKey} nameKey={query.xKey}
-             cx="50%" cy="50%" outerRadius={80} label={e => xLabel(e[query.xKey])}>
+        <Pie data={numericData} dataKey={yKey} nameKey={xKey}
+             cx="50%" cy="45%" outerRadius={90}
+             label={({ cx, cy, midAngle, outerRadius, name, percent }) =>
+               percent > 0.05 ? `${shortLabel(name)} ${(percent*100).toFixed(0)}%` : ''
+             }
+             labelLine={false}>
           {numericData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
         </Pie>
         <Tooltip formatter={v => Number(v).toLocaleString()} />
+        <Legend formatter={shortLabel} />
       </PieChart>
     </ResponsiveContainer>
   )
 
   if (query.chartType === 'line') return (
     <ResponsiveContainer width="100%" height={h}>
-      <LineChart data={numericData} margin={{ left: 10, right: 10 }}>
+      <LineChart data={numericData} margin={{ left: 0, right: 16, top: 4, bottom: 4 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#2e3350" />
-        <XAxis dataKey={query.xKey} tick={{ fill: '#8b90a8', fontSize: 10 }} tickFormatter={xLabel} />
-        <YAxis tick={{ fill: '#8b90a8', fontSize: 10 }} />
-        <Tooltip formatter={v => Number(v).toLocaleString()} />
-        <Line type="monotone" dataKey={query.yKey} stroke="#6e7bf0" strokeWidth={2} dot={false} />
+        <XAxis dataKey={xKey} tick={{ fill: '#8b90a8', fontSize: 10 }} tickFormatter={shortLabel} />
+        <YAxis tick={{ fill: '#8b90a8', fontSize: 10 }} tickFormatter={fmtNum} width={52} />
+        <Tooltip formatter={v => Number(v).toLocaleString()} contentStyle={tooltipStyle} />
+        <Line type="monotone" dataKey={yKey} stroke="#6e7bf0" strokeWidth={2} dot={false} />
       </LineChart>
     </ResponsiveContainer>
   )
 
   if (query.chartType === 'area') return (
     <ResponsiveContainer width="100%" height={h}>
-      <AreaChart data={numericData} margin={{ left: 10, right: 10 }}>
+      <AreaChart data={numericData} margin={{ left: 0, right: 16, top: 4, bottom: 4 }}>
         <defs>
           <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%"  stopColor="#6e7bf0" stopOpacity={0.4} />
@@ -117,23 +160,45 @@ export default function ChartWidget({ query }) {
           </linearGradient>
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="#2e3350" />
-        <XAxis dataKey={query.xKey} tick={{ fill: '#8b90a8', fontSize: 10 }} tickFormatter={xLabel} />
-        <YAxis tick={{ fill: '#8b90a8', fontSize: 10 }} />
-        <Tooltip formatter={v => Number(v).toLocaleString()} />
-        <Area type="monotone" dataKey={query.yKey} stroke="#6e7bf0" fill="url(#grad)" strokeWidth={2} />
+        <XAxis dataKey={xKey} tick={{ fill: '#8b90a8', fontSize: 10 }} tickFormatter={shortLabel} />
+        <YAxis tick={{ fill: '#8b90a8', fontSize: 10 }} tickFormatter={fmtNum} width={52} />
+        <Tooltip formatter={v => Number(v).toLocaleString()} contentStyle={tooltipStyle} />
+        <Area type="monotone" dataKey={yKey} stroke="#6e7bf0" fill="url(#grad)" strokeWidth={2} />
       </AreaChart>
     </ResponsiveContainer>
   )
 
-  // Default: bar
+  // Horizontal bar — categories on Y axis, always readable regardless of label length
+  const barH = Math.max(h, numericData.length * 28 + 40)
   return (
-    <ResponsiveContainer width="100%" height={h}>
-      <BarChart data={numericData} margin={{ left: 10, right: 10 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#2e3350" />
-        <XAxis dataKey={query.xKey} tick={{ fill: '#8b90a8', fontSize: 10 }} tickFormatter={xLabel} />
-        <YAxis tick={{ fill: '#8b90a8', fontSize: 10 }} />
-        <Tooltip formatter={v => Number(v).toLocaleString()} />
-        <Bar dataKey={query.yKey} radius={[4, 4, 0, 0]}>
+    <ResponsiveContainer width="100%" height={barH}>
+      <BarChart
+        data={numericData}
+        layout="vertical"
+        margin={{ left: 8, right: 32, top: 4, bottom: 4 }}
+      >
+        <CartesianGrid strokeDasharray="3 3" stroke="#2e3350" horizontal={false} />
+        <XAxis
+          type="number"
+          tick={{ fill: '#8b90a8', fontSize: 10 }}
+          tickFormatter={fmtNum}
+        />
+        <YAxis
+          type="category"
+          dataKey={xKey}
+          width={160}
+          tick={{ fill: '#a0a8c0', fontSize: 11 }}
+          tickFormatter={v => {
+            const s = String(v ?? '')
+            return s.length > 22 ? s.slice(0, 20) + '…' : s
+          }}
+        />
+        <Tooltip
+          formatter={v => Number(v).toLocaleString()}
+          labelFormatter={l => String(l)}
+          contentStyle={tooltipStyle}
+        />
+        <Bar dataKey={yKey} radius={[0, 4, 4, 0]} maxBarSize={22}>
           {numericData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
         </Bar>
       </BarChart>

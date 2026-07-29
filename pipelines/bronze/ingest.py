@@ -12,18 +12,35 @@ GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/dataSourc
 
 GITHUB_TOKEN = dbutils.secrets.get(scope="github", key="token")
 
-# ── Metastore quota guard ─────────────────────────────────────────────────────
-# Each DLT table = 2 UC objects (table + backing). Hard limit = 500.
-# Stop ingestion cleanly before hitting it.
+# ── Quota guards ──────────────────────────────────────────────────────────────
+# Metastore hard limit = 500 objects. Each CSV costs 4 objects:
+#   1 bronze DLT table + 1 backing + 1 silver DLT MV + 1 backing.
+# Fixed overhead (system/lakeview/info_schema): ~283 objects.
+# Gold: 20 views × 2 = 40.  Available for data: 177 / 4 per CSV = 44 max.
+# We cap at 40 bronze tables to leave a safety buffer.
+BRONZE_TABLE_LIMIT = 40
 METASTORE_SAFE_LIMIT = 490
+
 _metastore_count = spark.sql(
     "SELECT COUNT(*) FROM system.information_schema.tables"
 ).collect()[0][0]
 print(f"Metastore objects: {_metastore_count}/{METASTORE_SAFE_LIMIT}")
 if _metastore_count >= METASTORE_SAFE_LIMIT:
     raise RuntimeError(
-        f"Metastore quota near limit ({_metastore_count}/{METASTORE_SAFE_LIMIT}). "
-        "Drop unused tables before ingesting new CSVs."
+        f"Metastore near global limit ({_metastore_count}/500). "
+        "Drop tables from bronze/silver/gold before adding new CSVs."
+    )
+
+_bronze_table_count = spark.sql(
+    "SELECT COUNT(*) FROM dataingestionproject.information_schema.tables "
+    "WHERE table_schema='bronze' AND table_type='MANAGED'"
+).collect()[0][0]
+print(f"Bronze tables: {_bronze_table_count}/{BRONZE_TABLE_LIMIT}")
+if _bronze_table_count >= BRONZE_TABLE_LIMIT:
+    raise RuntimeError(
+        f"Bronze table limit reached ({_bronze_table_count}/{BRONZE_TABLE_LIMIT}). "
+        f"With a 500-object metastore quota you can have at most {BRONZE_TABLE_LIMIT} "
+        "CSV tables. Remove an existing CSV from dataSource/ to add a new one."
     )
 
 # Support space-separated list of changed files from GitHub Actions
