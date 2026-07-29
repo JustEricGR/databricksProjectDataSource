@@ -1,28 +1,40 @@
-// Vercel serverless function — proxies all /proxy/* requests to Databricks.
-// Runs server-side so there is no CORS issue.
+export const config = { api: { bodyParser: true } }
+
 export default async function handler(req, res) {
-  const databricksHost  = process.env.VITE_DATABRICKS_HOST
-  const databricksToken = process.env.VITE_DATABRICKS_TOKEN
+  const host  = process.env.VITE_DATABRICKS_HOST
+  const token = process.env.VITE_DATABRICKS_TOKEN
 
-  // Strip the /proxy prefix to get the real Databricks path
-  const path   = req.url.replace(/^\/proxy/, '') || '/'
-  const target = `${databricksHost}${path}`
-
-  const headers = {
-    Authorization:  `Bearer ${databricksToken}`,
-    'Content-Type': 'application/json',
+  if (!host) {
+    res.status(500).json({ error: 'VITE_DATABRICKS_HOST not set in Vercel environment variables.' })
+    return
+  }
+  if (!token) {
+    res.status(500).json({ error: 'VITE_DATABRICKS_TOKEN not set in Vercel environment variables.' })
+    return
   }
 
-  const upstream = await fetch(target, {
-    method:  req.method,
-    headers,
-    body:    req.method !== 'GET' && req.method !== 'HEAD'
-               ? JSON.stringify(req.body)
-               : undefined,
-  })
+  const path   = req.url.replace(/^\/proxy/, '') || '/'
+  const target = `${host.replace(/\/$/, '')}${path}`
 
-  const body = await upstream.text()
-  res.status(upstream.status)
-  res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json')
-  res.end(body)
+  try {
+    const upstream = await fetch(target, {
+      method:  req.method,
+      headers: {
+        Authorization:  `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept:         'application/json',
+      },
+      body: ['POST', 'PUT', 'PATCH'].includes(req.method)
+              ? JSON.stringify(req.body ?? {})
+              : undefined,
+    })
+
+    const text = await upstream.text()
+    res.status(upstream.status)
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json')
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.end(text)
+  } catch (err) {
+    res.status(500).json({ error: 'Proxy error', details: err.message, target })
+  }
 }
