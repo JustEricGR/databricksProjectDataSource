@@ -1,0 +1,8 @@
+{
+  "buildCommand": "cd dashboard-app && npm install && npm run build",
+  "outputDirectory": "dashboard-app/dist",
+  "rewrites": [
+    { "source": "/proxy/(.*)", "destination": "/api/proxy" },
+    { "source": "/(.*)",       "destination": "/index.html" }
+  ]
+}
