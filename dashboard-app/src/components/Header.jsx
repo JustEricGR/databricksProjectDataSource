@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Database, LayoutDashboard, Table2, GitBranch } from 'lucide-react'
+import { Database, LayoutDashboard, Table2, GitBranch, MonitorPlay } from 'lucide-react'
 
 export default function Header() {
   const loc = useLocation()
@@ -26,6 +26,9 @@ export default function Header() {
         </Link>
         <Link to="/architecture" className={`flex items-center gap-1 pb-1 text-sm font-medium transition-colors ${active('/architecture')}`}>
           <GitBranch size={14} /> Architecture
+        </Link>
+        <Link to="/presentation" className={`flex items-center gap-1 pb-1 text-sm font-medium transition-colors ${active('/presentation')}`}>
+          <MonitorPlay size={14} /> Slides
         </Link>
       </nav>
       <div className="ml-auto flex items-center gap-2">
